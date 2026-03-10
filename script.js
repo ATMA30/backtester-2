@@ -97,12 +97,14 @@ function initChart() {
       width: container.clientWidth,
       height: container.clientHeight,
     });
+    adjustPanes();
   });
   ro.observe(container);
   chart.applyOptions({
     width: container.clientWidth,
     height: container.clientHeight,
   });
+  adjustPanes();
 }
 
 function createMainSeries() {
@@ -324,17 +326,48 @@ function updateIndMenu() {
 }
 
 function adjustPanes() {
+  if (!chart) return;
   try {
     const hasRSI = customIndicators.some(x => x.type === "RSI");
     if (hasRSI) {
-      // Les marges top + bottom ne doivent jamais dépasser 1.0
-      chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.1, bottom: 0.35 } });
-      if (volumeSeries) chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.65, bottom: 0.25 } });
-      chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+      // Configuration avec RSI (3 étages)
+      // Bougies: s'arrêtent à 55% de la hauteur
+      chart.applyOptions({
+        rightPriceScale: { 
+          autoScale: true, 
+          scaleMargins: { top: 0.05, bottom: 0.45 } 
+        }
+      });
+      // Volume: compacté entre 60% et 75%
+      if (volumeSeries) {
+        chart.priceScale("volume").applyOptions({ 
+          autoScale: true, 
+          scaleMargins: { top: 0.60, bottom: 0.25 } 
+        });
+      }
+      // RSI: tout en bas (80% à 100%)
+      chart.priceScale("rsi").applyOptions({ 
+        autoScale: true, 
+        scaleMargins: { top: 0.80, bottom: 0 } 
+      });
     } else {
-      chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } });
-      if (volumeSeries) chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-      try { chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 1, bottom: 0 } }); } catch (err) { }
+      // Configuration sans RSI (2 étages)
+      // Bougies: s'arrêtent à 70% de la hauteur
+      chart.applyOptions({
+        rightPriceScale: { 
+          autoScale: true, 
+          scaleMargins: { top: 0.05, bottom: 0.30 } 
+        }
+      });
+      // Volume: tout en bas (80% à 100%)
+      if (volumeSeries) {
+        chart.priceScale("volume").applyOptions({ 
+          autoScale: true, 
+          scaleMargins: { top: 0.80, bottom: 0 } 
+        });
+      }
+      // Cacher/Écraser l'échelle RSI si elle existait
+      try { chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 1, bottom: 0 } }); } catch (err) {}
     }
   } catch (e) {
     console.error("Pane adjust error:", e);
