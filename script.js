@@ -43,6 +43,20 @@ function initChart() {
       fontFamily: "'JetBrains Mono', monospace",
       fontSize: 11,
     },
+    localization: {
+      locale: "fr-FR",
+      timeFormatter: (t) => {
+        const d = new Date(t * 1000);
+        return d.toLocaleDateString("fr-FR", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      },
+    },
     grid: {
       vertLines: { color: "#0d111b", visible: true },
       horzLines: { color: "#0d111b", visible: true },
@@ -245,8 +259,12 @@ function ensureTooltipDOM() {
 const _dateFormatter =
   typeof Intl !== "undefined"
     ? new Intl.DateTimeFormat("fr-FR", {
-      dateStyle: "medium",
-      timeStyle: "short",
+      weekday: "long",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     })
     : null;
 
@@ -1565,23 +1583,26 @@ self.onmessage = function(e) {
     var n = times.length;
 
     function getBucket(t) {
+        var dd = new Date(t * 1000);
+        if (tfSec === 86400) {
+            var day = dd.getUTCDay();
+            if (day === 0) { // Sunday → Merge into Monday
+                return Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate() + 1) / 1000;
+            }
+        }
         if (tfType === 'week') {
-            var dd = new Date(t * 1000);
             var day = dd.getUTCDay();
             var diff = (day === 0) ? 6 : day - 1;
             return Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate() - diff) / 1000;
         }
         if (tfType === 'month') {
-            var dd = new Date(t * 1000);
             return Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth(), 1) / 1000;
         }
         if (tfType === 'quarter') {
-            var dd = new Date(t * 1000);
             var q = Math.floor(dd.getUTCMonth() / 3);
             return Date.UTC(dd.getUTCFullYear(), q * 3, 1) / 1000;
         }
         if (tfType === 'year') {
-            var dd = new Date(t * 1000);
             return Date.UTC(dd.getUTCFullYear(), 0, 1) / 1000;
         }
         return Math.floor(t / tfSec) * tfSec;
@@ -1696,26 +1717,31 @@ function ensureBaseFlat() {
 
 // ── Calendar-aware bucket function (main thread version mirrors worker) ──
 function getCalendarBucket(t, tfType, tfSec) {
+  const d = new Date(t * 1000);
+  if (tfSec === 86400) {
+    const day = d.getUTCDay();
+    if (day === 0) {
+      // Sunday → Merge into Monday
+      return (
+        Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) / 1000
+      );
+    }
+  }
   if (tfType === "week") {
-    const d = new Date(t * 1000);
     const day = d.getUTCDay();
     const diff = day === 0 ? 6 : day - 1;
     return (
-      Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - diff) /
-      1000
+      Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - diff) / 1000
     );
   }
   if (tfType === "month") {
-    const d = new Date(t * 1000);
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000;
   }
   if (tfType === "quarter") {
-    const d = new Date(t * 1000);
     const q = Math.floor(d.getUTCMonth() / 3);
     return Date.UTC(d.getUTCFullYear(), q * 3, 1) / 1000;
   }
   if (tfType === "year") {
-    const d = new Date(t * 1000);
     return Date.UTC(d.getUTCFullYear(), 0, 1) / 1000;
   }
   return Math.floor(t / tfSec) * tfSec;
@@ -3722,9 +3748,10 @@ function rpPause() {
 }
 
 const _fastDateFormatter = new Intl.DateTimeFormat("fr-FR", {
+  weekday: "short",
   day: "2-digit",
   month: "short",
-  year: "2-digit",
+  year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
   timeZone: "UTC",
