@@ -302,9 +302,6 @@ function handleCrosshair(param) {
 // ========================================================
 //  INDICATORS
 // ========================================================
-// ========================================================
-//  INDICATORS
-// ========================================================
 let customIndicators = [];
 const IND_COLORS = ["#ff9800", "#2196f3", "#9c27b0", "#4caf50", "#e91e63", "#00bcd4", "#8bc34a"];
 
@@ -418,10 +415,14 @@ function computeSMA(data, period) {
 
 function computeEMA(data, period) {
   const res = [];
-  if (!data.length) return res;
-  let ema = data[0].close;
+  if (data.length < period) return res;
+  // Seed avec SMA des `period` premières valeurs (convention standard — évite le biais de démarrage)
+  let seed = 0;
+  for (let i = 0; i < period; i++) seed += data[i].close;
+  let ema = seed / period;
   const k = 2 / (period + 1);
-  for (let i = 0; i < data.length; i++) {
+  res.push({ time: data[period - 1].time, value: ema });
+  for (let i = period; i < data.length; i++) {
     ema = (data[i].close - ema) * k + ema;
     res.push({ time: data[i].time, value: ema });
   }
@@ -599,7 +600,8 @@ function setOHLCV(o, h, l, c, chg) {
 }
 
 // Fast number formatter — avoids toLocaleString (100x slower than manual)
-const _fmtCache = new Map();
+// Regex compilée une seule fois au niveau module (évite la recompilation à chaque frame crosshair)
+const _thousandSepRx = /\B(?=(\d{3})+(?!\d))/g;
 function fmt(v) {
   if (!v && v !== 0) return "—";
   const n = +v;
@@ -608,9 +610,8 @@ function fmt(v) {
   let s;
   if (abs >= 1000) {
     s = n.toFixed(2);
-    // Insert thousand separators manually (fr-FR uses space)
     const parts = s.split(".");
-    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "\u00A0");
+    parts[0] = parts[0].replace(_thousandSepRx, "\u00A0");
     s = parts.join(",");
   } else if (abs >= 1) {
     s = n.toFixed(4);
@@ -663,7 +664,13 @@ let workerPendingSep = null;
 let workerPendingIsJson = false;
 let activeWorker = null;
 
+const _MAX_FILE_BYTES = 500 * 1024 * 1024; // Limite 500 Mo — évite le crash OOM sur fichiers massifs
+
 function processFile(file) {
+  if (file.size > _MAX_FILE_BYTES) {
+    showError(`Fichier trop volumineux (${(file.size / 1024 / 1024).toFixed(0)} Mo). Limite: 500 Mo.`);
+    return;
+  }
   pendingFile = file;
   document.getElementById("drop-filename").textContent = `✅ ${file.name}`;
   document.getElementById("modal-drop").style.borderColor = "var(--green)";
@@ -803,9 +810,9 @@ function populateMapper(headers) {
 function autoMatch(header, field) {
   const h = header.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const maps = {
+    // "time" retiré des alias date — il appartient exclusivement au champ time (sinon collision CSV Metatrader)
     date: [
       "date",
-      "time",
       "timestamp",
       "datetime",
       "dt",
@@ -1316,9 +1323,11 @@ function showProgress(pct, label) {
                     <div id="pp-pct">0%</div>
                     <button id="pp-cancel" onclick="cancelImport()">Annuler</button>
                   </div>`;
-    // Styles
-    const s = document.createElement("style");
-    s.textContent = `
+    // Styles — injectés une seule fois (évite N balises <style> dupliquées après N imports)
+    if (!document.getElementById("pp-styles")) {
+      const s = document.createElement("style");
+      s.id = "pp-styles";
+      s.textContent = `
                   #parse-progress { position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center; }
                   #pp-backdrop { position:absolute;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px); }
                   #pp-box { position:relative;background:#1e2438;border:1px solid #2a3352;border-radius:14px;
@@ -1334,7 +1343,8 @@ function showProgress(pct, label) {
                     padding:6px 20px;border-radius:6px;cursor:pointer;font-family:'Inter',sans-serif;font-size:12px; }
                   #pp-cancel:hover { border-color:#ff4466;color:#ff4466; }
                 `;
-    document.head.appendChild(s);
+      document.head.appendChild(s);
+    }
     document.body.appendChild(bar);
   }
   document.getElementById("pp-label").textContent = label || "Chargement…";
@@ -1404,8 +1414,11 @@ function parseTimestamp(val) {
     const d2 = new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T00:00:00Z`);
     if (!isNaN(d2.getTime())) return Math.floor(d2.getTime() / 1000);
   }
-  // Try as a string date for lightweight-charts day format YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Format YYYY-MM-DD — converti en timestamp Unix UTC (ne pas retourner la string: brise les comparaisons numériques)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d4 = new Date(s + 'T00:00:00Z');
+    if (!isNaN(d4.getTime())) return Math.floor(d4.getTime() / 1000);
+  }
   return null;
 }
 
@@ -1833,6 +1846,9 @@ function switchTF(tfSec, tfType, btn) {
       requestAnimationFrame(() => requestAnimationFrame(drawRedraw));
     };
     aggWorker.onerror = (err) => {
+      aggWorker.terminate();
+      aggWorker = null;
+      URL.revokeObjectURL(url); // Évite la fuite mémoire: Blob URL orphelin si erreur worker
       clearStatusAgg();
       alert("Erreur agrégation: " + err.message);
     };
@@ -1955,7 +1971,8 @@ function resizeDrawCanvas() {
   drawCanvas.height = c.clientHeight * dpr;
   drawCanvas.style.width = c.clientWidth + "px";
   drawCanvas.style.height = c.clientHeight + "px";
-  drawCtx.scale(dpr, dpr);
+  // setTransform réinitialise ET applique le DPR en une opération (evite l'accumulation sur chaque resize)
+  drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawRedraw();
 }
 
@@ -2673,6 +2690,8 @@ function drawRedraw() {
   const W = drawCanvas.width / (window.devicePixelRatio || 1);
   const H = drawCanvas.height / (window.devicePixelRatio || 1);
   drawCtx.clearRect(0, 0, W, H);
+  // Séparateurs de session (sous les dessins)
+  drawSeparators(W, H);
   drawings.forEach((d) => drawShape(d, d === selectedDrawing, W, H));
   // Preview while drawing
   if (drawPts.length && drawPreview) {
@@ -2855,6 +2874,118 @@ function showTextInput(x, y, pt) {
     }
   };
 }
+
+// ========================================================
+//  SÉPARATEURS DE SESSION (TIMEFRAME GRID)
+// ========================================================
+
+/** TF actif pour les séparateurs. null = désactivé. Sinon: {label, s, tfType} issu de TF_DEFS */
+let separatorTF = null;
+
+/**
+ * Formate l'étiquette affichée au-dessus de chaque ligne séparatrice.
+ * @param {number} bucket - timestamp Unix du début de la période
+ * @param {string} tfType - type de période ('intraday', 'week', 'month', 'quarter', 'year')
+ */
+function _fmtSepLabel(bucket, tfType) {
+  const d = new Date(bucket * 1000);
+  if (tfType === 'year') return String(d.getUTCFullYear());
+  if (tfType === 'quarter') {
+    const q = Math.floor(d.getUTCMonth() / 3) + 1;
+    return `T${q} '${String(d.getUTCFullYear()).slice(2)}`;
+  }
+  if (tfType === 'month') {
+    return d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+  }
+  if (tfType === 'week') {
+    // Numéro de semaine ISO
+    const tmp = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
+    const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7);
+    return `S${week}`;
+  }
+  // intraday → séparateurs journaliers
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+}
+
+/**
+ * Dessine les lignes séparatrices verticales sur le canvas d'overlay.
+ * Appelé depuis drawRedraw() avant les dessins utilisateur.
+ */
+// Palette de couleurs des séparateurs indexée par label TF
+const _SEP_COLORS = {
+  '1D': { line: 'rgba(91, 142, 255, 0.30)', label: 'rgba(91, 142, 255, 0.65)' },
+  '1W': { line: 'rgba(12, 241, 155, 0.28)', label: 'rgba(12, 241, 155, 0.60)' },
+  '1M': { line: 'rgba(168, 85,  247, 0.30)', label: 'rgba(168, 85, 247, 0.65)' },
+  '3M': { line: 'rgba(240, 185, 11,  0.28)', label: 'rgba(240, 185, 11,  0.60)' },
+  '1Y': { line: 'rgba(255, 68,  102, 0.30)', label: 'rgba(255, 68, 102, 0.65)' },
+};
+
+function drawSeparators(W, H) {
+  if (!separatorTF || !sortedTimes || !sortedTimes.length || !chart) return;
+  const { label: tfLabel, tfType, s } = separatorTF;
+  const palette = _SEP_COLORS[tfLabel] || { line: 'rgba(130,148,210,0.28)', label: 'rgba(150,170,230,0.55)' };
+
+  drawCtx.save();
+  drawCtx.lineWidth = 1;
+  drawCtx.setLineDash([4, 6]);
+  drawCtx.font = '9px \'JetBrains Mono\', monospace';
+  drawCtx.textBaseline = 'top';
+
+  let lastBucket = getCalendarBucket(sortedTimes[0], tfType, s);
+  for (let i = 1; i < sortedTimes.length; i++) {
+    const bucket = getCalendarBucket(sortedTimes[i], tfType, s);
+    if (bucket === lastBucket) continue;
+    lastBucket = bucket;
+
+    const x = chart.timeScale().timeToCoordinate(sortedTimes[i]);
+    if (x === null || x < 0 || x > W) continue;
+
+    // Ligne pointillée colorée
+    drawCtx.strokeStyle = palette.line;
+    drawCtx.beginPath();
+    drawCtx.moveTo(x, 0);
+    drawCtx.lineTo(x, H);
+    drawCtx.stroke();
+
+    // Étiquette de période (3px à droite, 4px du haut)
+    drawCtx.fillStyle = palette.label;
+    const periodLabel = _fmtSepLabel(bucket, tfType);
+    drawCtx.fillText(periodLabel, x + 3, 4);
+  }
+
+  drawCtx.restore();
+}
+
+/**
+ * Sélectionne la TF des séparateurs.
+ * @param {string|null} tfLabel - ex: '1D', '1W', '1M', '3M', '1Y' ou null pour désactiver
+ */
+function setSeparatorTF(tfLabel) {
+  if (tfLabel === null) {
+    separatorTF = null;
+  } else {
+    const tfd = TF_DEFS.find(t => t.label === tfLabel);
+    separatorTF = tfd || null;
+  }
+
+  const btn = document.getElementById('btn-sep');
+  if (btn) btn.classList.toggle('active', separatorTF !== null);
+
+  // Mettre à jour l'élément actif dans le menu
+  const menu = document.getElementById('menu-sep');
+  if (menu) {
+    menu.querySelectorAll('.tv-dropdown-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.tf === (tfLabel === null ? 'null' : tfLabel));
+    });
+  }
+
+  drawRedraw();
+}
+
+// Note: le rafraîchissement des séparateurs sur scroll/zoom est assuré par
+// _throttledDrawRedraw (déjà souscrit dans initDrawCanvas). Pas de souscription dupliquée.
 
 // ========================================================
 //  INIT
@@ -3333,7 +3464,7 @@ function startReplayMode() {
 }
 
 function evalTradeSimLogic(c) {
-  // Check Pending Orders
+  // Check Pending Orders (itération inverse — splice sécurisé car on progresse vers 0)
   for (let i = tradeSim.pendingOrders.length - 1; i >= 0; i--) {
     const p = tradeSim.pendingOrders[i];
     let hit = false;
@@ -3343,24 +3474,25 @@ function evalTradeSimLogic(c) {
     if (hit) {
       _removeLinesFrom(p);
       tradeSim.pendingOrders.splice(i, 1);
-      p.time = c.time; // Update entry time to current candle
+      p.time = c.time;
       tradeSim.positions.push(p);
       _drawTradeLines(p, p.type);
       _updateAllTradeMarkers();
     }
   }
 
-  // Check Sl/TP for active positions
-  for (let i = tradeSim.positions.length - 1; i >= 0; i--) {
-    const p = tradeSim.positions[i];
+  // Check SL/TP — collecter d'abord, fermer ensuite (evite splice pendant itération = index décalé)
+  const toClose = [];
+  for (const p of tradeSim.positions) {
     if (p.type === "LONG") {
-      if (p.sl && c.low <= p.sl) closePosition("SL", p.sl, p.id);
-      else if (p.tp && c.high >= p.tp) closePosition("TP", p.tp, p.id);
+      if (p.sl && c.low <= p.sl) toClose.push({ id: p.id, reason: "SL", price: p.sl });
+      else if (p.tp && c.high >= p.tp) toClose.push({ id: p.id, reason: "TP", price: p.tp });
     } else if (p.type === "SHORT") {
-      if (p.sl && c.high >= p.sl) closePosition("SL", p.sl, p.id);
-      else if (p.tp && c.low <= p.tp) closePosition("TP", p.tp, p.id);
+      if (p.sl && c.high >= p.sl) toClose.push({ id: p.id, reason: "SL", price: p.sl });
+      else if (p.tp && c.low <= p.tp) toClose.push({ id: p.id, reason: "TP", price: p.tp });
     }
   }
+  toClose.forEach(({ id, reason, price }) => closePosition(reason, price, id));
 
   updateSimUI(c.close);
 }
@@ -3378,7 +3510,7 @@ function _updateReplaySeries() {
       v = c.volume || 0;
     const bucketTime = getCalendarBucket(c.time, activeTFType, activeTF);
     let foundStart = false;
-    for (let i = replay.idx - 1; i >= 0; i--) {
+    for (let i = replay.idx - 1; i >= replay.startIdx; i--) { // borné à startIdx: évite les données "futures"
       const bCandle = baseCandles[i];
       if (
         getCalendarBucket(bCandle.time, activeTFType, activeTF) !== bucketTime
@@ -3665,7 +3797,14 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("rp-scrubber").addEventListener("input", (e) => {
     if (!replay.active) return;
     rpPause();
+    const prevIdx = replay.idx;
     const targetIdx = replay.startIdx + parseInt(e.target.value, 10);
+    // Évaluer la sim sur les bougies sautées (direction avant uniquement)
+    if (targetIdx > prevIdx) {
+      for (let i = prevIdx + 1; i <= targetIdx && i < baseCandles.length; i++) {
+        evalTradeSimLogic(baseCandles[i]);
+      }
+    }
     replay.idx = targetIdx;
     // Rebuild from startIdx to targetIdx (slice, fast)
     const visible = baseCandles.slice(0, targetIdx + 1);

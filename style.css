@@ -1241,3 +1241,52 @@ body.replay-active #tv-chart {
   color: var(--text-muted);
   margin-top: 4px;
 }
+
+/* ===== SÉPARATEURS DE SESSION ===== */
+.sep-dropdown {
+  position: relative;
+}
+
+/* Le menu du dropdown séparateur s'ouvre vers le bas, aligné à gauche */
+.sep-menu {
+  min-width: 185px;
+  left: 0;
+}
+
+/* Titre de section dans le dropdown */
+.sep-menu-title {
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+/* Icônes de couleur de séparation — visuellement représentative */
+.sep-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sep-color-day     { color: #5b8eff; }
+.sep-color-week    { color: #0cf19b; }
+.sep-color-month   { color: #a855f7; }
+.sep-color-quarter { color: #f0b90b; }
+.sep-color-year    { color: #ff4466; }
+
+/* Bouton séparateur actif */
+#btn-sep.active {
+  color: #7ba8ff;
+  background: rgba(91, 142, 255, 0.1);
+  border-color: rgba(91, 142, 255, 0.3);
+}

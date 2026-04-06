@@ -59,6 +59,41 @@
           <polygon points="10 8 16 12 10 16 10 8"></polygon>
         </svg>
       </button>
+
+      <!-- Séparateurs de session -->
+      <div class="tv-dropdown sep-dropdown" id="dropdown-sep">
+        <button class="tv-icon-btn" id="btn-sep" onclick="toggleDropdown('menu-sep')" title="Séparateurs de session">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+            stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8"  y1="3"  x2="8"  y2="21"></line>
+            <line x1="16" y1="3"  x2="16" y2="21"></line>
+            <line x1="3"  y1="12" x2="5"  y2="12"></line>
+            <line x1="11" y1="12" x2="13" y2="12"></line>
+            <line x1="19" y1="12" x2="21" y2="12"></line>
+          </svg>
+        </button>
+        <div class="tv-dropdown-menu sep-menu" id="menu-sep">
+          <div class="sep-menu-title">Séparateurs de session</div>
+          <div class="tv-dropdown-item active" data-tf="null"  onclick="setSeparatorTF(null); toggleDropdown('menu-sep')">
+            <span class="sep-icon">✕</span> Désactivé
+          </div>
+          <div class="tv-dropdown-item" data-tf="1D" onclick="setSeparatorTF('1D'); toggleDropdown('menu-sep')">
+            <span class="sep-icon sep-color-day">│</span> Journalier
+          </div>
+          <div class="tv-dropdown-item" data-tf="1W" onclick="setSeparatorTF('1W'); toggleDropdown('menu-sep')">
+            <span class="sep-icon sep-color-week">│</span> Hebdomadaire
+          </div>
+          <div class="tv-dropdown-item" data-tf="1M" onclick="setSeparatorTF('1M'); toggleDropdown('menu-sep')">
+            <span class="sep-icon sep-color-month">│</span> Mensuel
+          </div>
+          <div class="tv-dropdown-item" data-tf="3M" onclick="setSeparatorTF('3M'); toggleDropdown('menu-sep')">
+            <span class="sep-icon sep-color-quarter">│</span> Trimestriel
+          </div>
+          <div class="tv-dropdown-item" data-tf="1Y" onclick="setSeparatorTF('1Y'); toggleDropdown('menu-sep')">
+            <span class="sep-icon sep-color-year">│</span> Annuel
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- topbar-center removed -->
