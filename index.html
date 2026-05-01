@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-  <link rel="stylesheet" href="style.css?v=6" />
+  <link rel="stylesheet" href="style.css?v=7" />
 </head>
 
 <body>
@@ -187,6 +187,21 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round"><path d="M3 12 Q6 5 9 12 Q12 19 15 12 Q18 5 21 12"/></svg>
             Force Relative (RSI)
+          </div>
+          <div class="tv-dropdown-item" onclick="promptAddIndicator('MACD')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12" stroke-dasharray="3 2"/><path d="M3 8 Q8 4 12 8 Q16 12 21 8"/></svg>
+            MACD
+          </div>
+          <div class="tv-dropdown-item" onclick="promptAddIndicator('BB')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round"><path d="M3 6 Q12 3 21 6"/><path d="M3 12 Q12 10 21 12"/><path d="M3 18 Q12 21 21 18"/></svg>
+            Bollinger Bands
+          </div>
+          <div class="tv-dropdown-item" onclick="promptAddIndicator('VWAP')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round"><path d="M3 18 Q8 6 14 10 Q18 13 21 8"/></svg>
+            VWAP
           </div>
           <div class="dropdown-divider"></div>
           <div class="dropdown-section-label">Actifs</div>
@@ -462,6 +477,10 @@
 
       <div class="rp-trade-inputs">
         <div class="rp-input-box">
+          <span>RISK%</span>
+          <input type="number" id="trade-risk-pct" value="2" step="0.5" min="0.1" max="100" />
+        </div>
+        <div class="rp-input-box">
           <span>QTÉ</span>
           <input type="number" id="trade-qty" value="1" step="0.1" min="0.01" />
         </div>
@@ -590,9 +609,9 @@
         <div class="ind-modal-title" id="ind-modal-title">Ajouter SMA</div>
         <button class="ind-modal-close" onclick="closeIndicatorModal()">✕</button>
       </div>
-      <div class="ind-field">
-        <label for="ind-period">Période</label>
-        <input type="number" id="ind-period" min="1" max="999" value="20"
+      <div class="ind-field" id="ind-period-field">
+        <label for="ind-period" id="ind-period-label">Période</label>
+        <input type="text" id="ind-period" value="20"
           onkeydown="if(event.key==='Enter')confirmAddIndicator();if(event.key==='Escape')closeIndicatorModal()" />
       </div>
       <div class="ind-field">
@@ -642,6 +661,14 @@
       <div class="th-stat">
         <div class="th-stat-label">Avg W/L</div>
         <div class="th-stat-val" id="th-avg-wl">—</div>
+      </div>
+      <div class="th-stat">
+        <div class="th-stat-label">Profit Factor</div>
+        <div class="th-stat-val" id="th-profit-factor">—</div>
+      </div>
+      <div class="th-stat">
+        <div class="th-stat-label">Max Streak ↓</div>
+        <div class="th-stat-val" id="th-streak">—</div>
       </div>
     </div>
     <!-- Equity Curve -->
@@ -694,7 +721,17 @@
   <!-- Snap OHLC indicator -->
   <div id="snap-badge" class="snap-active-indicator">⬡ Snap OHLC actif</div>
 
-  <script src="script.js?v=6"></script>
+  <script src="js/config.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/chart.js"></script>
+  <script src="js/indicators.js"></script>
+  <script src="js/parser.js"></script>
+  <script src="js/timeframe.js"></script>
+  <script src="js/drawings.js"></script>
+  <script src="js/trading.js"></script>
+  <script src="js/replay.js"></script>
+  <script src="js/main.js"></script>
 </body>
 
 </html>
