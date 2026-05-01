@@ -63,28 +63,47 @@ function snapTime(time) {
   return sortedTimes[lo];
 }
 
+// Find two adjacent visible bars to derive the pixels-per-second ratio.
+// Walking from the edge inward ensures we get bars that are on screen
+// even when the data edges are scrolled out of view.
+function _visibleBarPair(fromEnd) {
+  const ts = chart.timeScale();
+  let x1 = null, t1 = null, x2 = null, t2 = null;
+  const n = sortedTimes.length;
+  const step = fromEnd ? -1 : 1;
+  const start = fromEnd ? n - 1 : 0;
+  const stop  = fromEnd ? -1   : n;
+  for (let i = start; i !== stop; i += step) {
+    const cx = ts.timeToCoordinate(sortedTimes[i]);
+    if (cx === null) continue;
+    if (x1 === null) { x1 = cx; t1 = sortedTimes[i]; }
+    else             { x2 = cx; t2 = sortedTimes[i]; break; }
+  }
+  // pps = pixels per second (positive means time increases to the right)
+  if (x1 !== null && x2 !== null && t1 !== t2) {
+    return { x1, t1, pps: (x1 - x2) / (t1 - t2) };
+  }
+  return null;
+}
+
 function toXY(time, price) {
-  let x = chart.timeScale().timeToCoordinate(time);
+  const ts = chart.timeScale();
+  let x = ts.timeToCoordinate(time);
 
   if ((x === null || x === undefined) && sortedTimes.length >= 2) {
     const n = sortedTimes.length;
     const first = sortedTimes[0], last = sortedTimes[n - 1];
 
-    if (time < first) {
-      const xA = chart.timeScale().timeToCoordinate(sortedTimes[0]);
-      const xB = chart.timeScale().timeToCoordinate(sortedTimes[1]);
-      if (xA !== null && xB !== null && sortedTimes[1] !== sortedTimes[0]) {
-        const ppSec = (xB - xA) / (sortedTimes[1] - sortedTimes[0]);
-        x = xA + (time - sortedTimes[0]) * ppSec;
-      }
-    } else if (time > last) {
-      const xA = chart.timeScale().timeToCoordinate(sortedTimes[n - 2]);
-      const xB = chart.timeScale().timeToCoordinate(sortedTimes[n - 1]);
-      if (xA !== null && xB !== null && sortedTimes[n - 1] !== sortedTimes[n - 2]) {
-        const ppSec = (xB - xA) / (sortedTimes[n - 1] - sortedTimes[n - 2]);
-        x = xB + (time - sortedTimes[n - 1]) * ppSec;
-      }
+    if (time > last) {
+      // Beyond last bar — extrapolate right using nearest visible bars
+      const ref = _visibleBarPair(true);
+      if (ref) x = ref.x1 + (time - ref.t1) * ref.pps;
+    } else if (time < first) {
+      // Before first bar — extrapolate left using nearest visible bars
+      const ref = _visibleBarPair(false);
+      if (ref) x = ref.x1 + (time - ref.t1) * ref.pps;
     } else {
+      // Within range — binary search + linear interpolation between neighbours
       let lo = 0, hi = n - 1;
       while (lo < hi) {
         const mid = (lo + hi) >> 1;
@@ -92,11 +111,10 @@ function toXY(time, price) {
         else hi = mid;
       }
       const tA = sortedTimes[lo - 1], tB = sortedTimes[lo];
-      const xA = chart.timeScale().timeToCoordinate(tA);
-      const xB = chart.timeScale().timeToCoordinate(tB);
-      if (xA !== null && xB !== null && tB !== tA) {
+      const xA = ts.timeToCoordinate(tA);
+      const xB = ts.timeToCoordinate(tB);
+      if (xA !== null && xB !== null && tB !== tA)
         x = xA + ((xB - xA) * (time - tA)) / (tB - tA);
-      }
     }
   }
 
@@ -115,19 +133,29 @@ function fromXY(x, y) {
   let time = chart.timeScale().coordinateToTime(x);
 
   if (!time && sortedTimes.length >= 2) {
-    const lastT = sortedTimes[sortedTimes.length - 1];
-    const prevT = sortedTimes[sortedTimes.length - 2];
-    const lastX = chart.timeScale().timeToCoordinate(lastT);
-    const prevX = chart.timeScale().timeToCoordinate(prevT);
-    if (lastX !== null && prevX !== null) {
-      const barW = lastX - prevX;
-      const interval = lastT - prevT;
-      if (barW > 0) {
-        const barsOff = (x - lastX) / barW;
-        time = Math.round(lastT + barsOff * interval);
+    const ts = chart.timeScale();
+
+    // Find the two nearest bars that still have valid screen coordinates.
+    // Walking backward from the end handles the common case where the chart
+    // is scrolled so the last bar is to the right of the visible area.
+    let refX1 = null, refT1 = null, refX2 = null, refT2 = null;
+    for (let i = sortedTimes.length - 1; i >= 0; i--) {
+      const cx = ts.timeToCoordinate(sortedTimes[i]);
+      if (cx === null) continue;
+      if (refX1 === null) { refX1 = cx; refT1 = sortedTimes[i]; }
+      else                { refX2 = cx; refT2 = sortedTimes[i]; break; }
+    }
+
+    if (refX1 !== null && refX2 !== null) {
+      const barW    = refX1 - refX2;          // px per bar (always > 0 going right→left)
+      const interval = refT1 - refT2;         // seconds per bar
+      if (Math.abs(barW) > 0.01) {
+        const barsOff = (x - refX1) / barW;
+        time = Math.round(refT1 + barsOff * interval);
       }
     }
-    if (!time) time = lastT;
+
+    if (!time) time = sortedTimes[sortedTimes.length - 1];
   }
 
   const price = mainSeries ? mainSeries.coordinateToPrice(y) : 0;
