@@ -208,16 +208,37 @@ function updateTradeHistoryPanel() {
   if (!_tradeHistoryOpen) return;
   const history = tradeSim ? tradeSim.history : [];
   const count = history.length;
-  const wins = history.filter(t => t.pnl > 0).length;
+  const wins = history.filter(t => t.pnl > 0);
+  const losses = history.filter(t => t.pnl < 0);
   const totalPnl = history.reduce((s, t) => s + t.pnl, 0);
   const best = count ? Math.max(...history.map(t => t.pnl)) : null;
 
+  // Drawdown analysis
+  let maxDrawdown = 0;
+  let peak = 0;
+  let cumulative = 0;
+  history.forEach(t => {
+    cumulative += t.pnl;
+    peak = Math.max(peak, cumulative);
+    maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
+  });
+
+  // Avg win/loss
+  const avgWin = wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+  const avgLoss = losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
+  const wlRatio = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : (avgWin > 0 ? 999 : 0);
+
   document.getElementById("th-count").textContent = count;
-  document.getElementById("th-winrate").textContent = count ? `${Math.round(wins / count * 100)}%` : "—";
+  document.getElementById("th-winrate").textContent = count ? `${Math.round(wins.length / count * 100)}%` : "—";
   const pnlEl = document.getElementById("th-total-pnl");
   pnlEl.textContent = `${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`;
   pnlEl.className = "th-stat-val " + (totalPnl > 0 ? "positive" : totalPnl < 0 ? "negative" : "");
   document.getElementById("th-best").textContent = best !== null ? `$${best.toFixed(2)}` : "—";
+  document.getElementById("th-drawdown").textContent = maxDrawdown > 0 ? `−$${maxDrawdown.toFixed(2)}` : "—";
+  document.getElementById("th-avg-wl").textContent = count ? `${wlRatio.toFixed(2)}` : "—";
+
+  // Draw equity curve
+  drawEquityCurve(history);
 
   const list = document.getElementById("th-list");
   if (!count) {
@@ -236,6 +257,66 @@ function updateTradeHistoryPanel() {
       <span class="th-trade-pnl ${pnlSign}">${pnlTxt}</span>
     </div>`;
   }).join("");
+}
+
+function drawEquityCurve(history) {
+  const svg = document.getElementById("equity-curve");
+  if (!svg) return;
+  svg.innerHTML = ""; // Clear
+
+  if (!history.length) return;
+
+  const width = svg.clientWidth || 300;
+  const height = svg.clientHeight || 60;
+  const padding = 4;
+  const graphW = width - 2 * padding;
+  const graphH = height - 2 * padding;
+
+  // Compute equity values
+  let cumulative = 0;
+  const equityPoints = history.map(t => {
+    cumulative += t.pnl;
+    return cumulative;
+  });
+
+  const minEq = Math.min(0, ...equityPoints);
+  const maxEq = Math.max(0, ...equityPoints);
+  const eqRange = maxEq - minEq || 1;
+  const zeroLine = (0 - minEq) / eqRange; // Position of y=0 line
+
+  // Draw background
+  const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  bg.setAttribute("width", width);
+  bg.setAttribute("height", height);
+  bg.setAttribute("fill", "var(--bg-elevated)");
+  bg.setAttribute("fill", "#0f1420");
+  svg.appendChild(bg);
+
+  // Draw zero line
+  const zeroY = padding + (1 - zeroLine) * graphH;
+  const line0 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line0.setAttribute("x1", padding);
+  line0.setAttribute("y1", zeroY);
+  line0.setAttribute("x2", width - padding);
+  line0.setAttribute("y2", zeroY);
+  line0.setAttribute("stroke", "rgba(255,255,255,0.1)");
+  line0.setAttribute("stroke-width", "0.5");
+  svg.appendChild(line0);
+
+  // Build polyline path
+  const points = equityPoints.map((eq, i) => {
+    const x = padding + (i / (equityPoints.length - 1 || 1)) * graphW;
+    const y = padding + (1 - (eq - minEq) / eqRange) * graphH;
+    return `${x},${y}`;
+  }).join(" ");
+
+  const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  polyline.setAttribute("points", points);
+  polyline.setAttribute("fill", "none");
+  polyline.setAttribute("stroke", equityPoints[equityPoints.length - 1] >= 0 ? "var(--bull)" : "var(--bear)");
+  polyline.setAttribute("stroke-width", "1.5");
+  polyline.setAttribute("vector-effect", "non-scaling-stroke");
+  svg.appendChild(polyline);
 }
 
 // ========================================================
@@ -1762,6 +1843,29 @@ function exportCSV() {
   a.download = `${currentSymbol}_data.csv`;
   a.click();
   showToast(`${currentSymbol}_data.csv exporté`, "success", 2500);
+}
+
+function exportTradeHistory() {
+  if (!tradeSim || !tradeSim.history.length) {
+    showToast("Aucun trade à exporter", "warning");
+    return;
+  }
+  const header = "Type,Entry,Exit,Qty,P&L,R:R,Duration,Reason\n";
+  const rows = tradeSim.history.map(t => {
+    const riskDiff = Math.abs(t.entry - (t.sl || t.entry));
+    const rewardDiff = Math.abs(t.tp - t.entry);
+    const rr = riskDiff > 0 ? (rewardDiff / riskDiff).toFixed(2) : "—";
+    const duration = t.closeTime && t.openTime ? Math.round((t.closeTime - t.openTime) / 60) : "—";
+    const csv = `${t.type},"${t.entry.toFixed(6)}","${t.exit.toFixed(6)}","${t.qty.toFixed(4)}","${t.pnl.toFixed(2)}","${rr}","${duration}","${(t.reason || "").replace(/"/g, '""')}"`;
+    return csv;
+  }).join("\n");
+
+  const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${currentSymbol}_trades_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  showToast(`${tradeSim.history.length} trades exportés`, "success", 2500);
 }
 
 // ========================================================
