@@ -32,14 +32,283 @@ let currentSymbol = "DATA";
 let allCandles = [];
 
 // ========================================================
+//  TOAST NOTIFICATION SYSTEM
+// ========================================================
+const TOAST_ICONS = {
+  success: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  error:   `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+  warning: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+  info:    `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
+};
+
+function showToast(msg, type = "info", duration = 4000) {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `
+    <div class="toast-icon">${TOAST_ICONS[type] || TOAST_ICONS.info}</div>
+    <div class="toast-body"><div class="toast-msg">${msg}</div></div>
+    <button class="toast-close" onclick="this.closest('.toast').remove()">✕</button>
+    <div class="toast-progress"></div>`;
+  container.appendChild(toast);
+  requestAnimationFrame(() => requestAnimationFrame(() => toast.classList.add("toast-show")));
+  const t = setTimeout(() => {
+    toast.classList.remove("toast-show");
+    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+  }, duration);
+  toast.querySelector(".toast-close").addEventListener("click", () => clearTimeout(t));
+}
+
+// ========================================================
+//  DRAWING ID COUNTER  (avoids Date.now() collisions)
+// ========================================================
+let _drawingIdCounter = Date.now();
+function _nextDrawId() { return ++_drawingIdCounter; }
+
+// ========================================================
+//  UNDO / REDO
+// ========================================================
+let _undoStack = [];
+let _redoStack = [];
+const MAX_UNDO = 50;
+
+function _pushUndo() {
+  _undoStack.push(JSON.stringify(drawings));
+  if (_undoStack.length > MAX_UNDO) _undoStack.shift();
+  _redoStack = [];
+}
+
+function undo() {
+  if (!_undoStack.length) { showToast("Rien à annuler", "info", 2000); return; }
+  _redoStack.push(JSON.stringify(drawings));
+  drawings = JSON.parse(_undoStack.pop());
+  exitEditMode();
+  drawRedraw();
+  saveDrawings();
+}
+
+function redo() {
+  if (!_redoStack.length) { showToast("Rien à rétablir", "info", 2000); return; }
+  _undoStack.push(JSON.stringify(drawings));
+  drawings = JSON.parse(_redoStack.pop());
+  exitEditMode();
+  drawRedraw();
+  saveDrawings();
+}
+
+// ========================================================
+//  LOCAL STORAGE PERSISTENCE
+// ========================================================
+const LS_DRAWINGS = "tvp_drawings";
+const LS_PREFS    = "tvp_prefs";
+
+function saveDrawings() {
+  try { localStorage.setItem(LS_DRAWINGS, JSON.stringify(drawings)); } catch (e) {}
+}
+
+function loadDrawings() {
+  try {
+    const d = localStorage.getItem(LS_DRAWINGS);
+    if (d) drawings = JSON.parse(d);
+  } catch (e) {}
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(LS_PREFS, JSON.stringify({
+      symbol: currentSymbol, type: currentType,
+      volume: showVolume, grid: showGrid,
+    }));
+  } catch (e) {}
+}
+
+function loadPrefs() {
+  try {
+    const p = localStorage.getItem(LS_PREFS);
+    if (!p) return;
+    const prefs = JSON.parse(p);
+    if (prefs.symbol) currentSymbol = prefs.symbol;
+    if (prefs.type) currentType = prefs.type;
+    if (prefs.volume === false) showVolume = false;
+    if (prefs.grid === false) showGrid = false;
+  } catch (e) {}
+}
+
+// ========================================================
+//  INDICATOR CONFIG MODAL
+// ========================================================
+let _indModalType = null;
+let _indModalColor = null;
+const IND_SWATCH_COLORS = ["#3B82F6","#00C46E","#F59E0B","#F2364A","#A855F7","#00D4FF","#FF8C00","#ffffff"];
+
+function openIndicatorModal(type) {
+  _indModalType = type;
+  const defaultPeriod = type === "RSI" ? 14 : (type === "EMA" ? 21 : 20);
+  _indModalColor = IND_SWATCH_COLORS[customIndicators.length % IND_SWATCH_COLORS.length];
+
+  document.getElementById("ind-modal-title").textContent = `Ajouter ${type}`;
+  document.getElementById("ind-period").value = defaultPeriod;
+
+  const swatches = document.getElementById("ind-color-swatches");
+  swatches.innerHTML = IND_SWATCH_COLORS.map(c =>
+    `<div class="ind-color-swatch${c === _indModalColor ? " active" : ""}" style="background:${c}"
+      onclick="window._indSelectColor('${c}',this)"></div>`
+  ).join("");
+
+  document.getElementById("indicator-modal").classList.add("open");
+  setTimeout(() => document.getElementById("ind-period").focus(), 100);
+}
+
+window._indSelectColor = function(color, el) {
+  _indModalColor = color;
+  el.closest(".ind-color-swatches").querySelectorAll(".ind-color-swatch").forEach(s => s.classList.remove("active"));
+  el.classList.add("active");
+};
+
+function closeIndicatorModal() {
+  document.getElementById("indicator-modal").classList.remove("open");
+  _indModalType = null;
+}
+
+function confirmAddIndicator() {
+  if (!_indModalType) return;
+  const period = parseInt(document.getElementById("ind-period").value, 10);
+  if (isNaN(period) || period <= 0) {
+    showToast("Période invalide — entrez un nombre > 0", "error");
+    return;
+  }
+  const id = _nextDrawId().toString();
+  const color = _indModalColor || IND_SWATCH_COLORS[0];
+  const ind = { id, type: _indModalType, period, color, series: null };
+  customIndicators.push(ind);
+  updateIndMenu();
+  if (allCandles && allCandles.length) renderIndicators(allCandles);
+  closeIndicatorModal();
+  showToast(`${_indModalType}(${period}) ajouté`, "success", 2500);
+}
+
+// ========================================================
+//  TRADE HISTORY PANEL
+// ========================================================
+let _tradeHistoryOpen = false;
+
+function toggleTradeHistory() {
+  _tradeHistoryOpen = !_tradeHistoryOpen;
+  const panel = document.getElementById("trade-history-panel");
+  if (_tradeHistoryOpen) {
+    panel.classList.add("open");
+    updateTradeHistoryPanel();
+  } else {
+    panel.classList.remove("open");
+  }
+}
+
+function updateTradeHistoryPanel() {
+  if (!_tradeHistoryOpen) return;
+  const history = tradeSim ? tradeSim.history : [];
+  const count = history.length;
+  const wins = history.filter(t => t.pnl > 0).length;
+  const totalPnl = history.reduce((s, t) => s + t.pnl, 0);
+  const best = count ? Math.max(...history.map(t => t.pnl)) : null;
+
+  document.getElementById("th-count").textContent = count;
+  document.getElementById("th-winrate").textContent = count ? `${Math.round(wins / count * 100)}%` : "—";
+  const pnlEl = document.getElementById("th-total-pnl");
+  pnlEl.textContent = `${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(2)}`;
+  pnlEl.className = "th-stat-val " + (totalPnl > 0 ? "positive" : totalPnl < 0 ? "negative" : "");
+  document.getElementById("th-best").textContent = best !== null ? `$${best.toFixed(2)}` : "—";
+
+  const list = document.getElementById("th-list");
+  if (!count) {
+    list.innerHTML = '<div class="th-empty">Aucun trade fermé</div>';
+    return;
+  }
+  list.innerHTML = [...history].reverse().map(t => {
+    const pnlSign = t.pnl >= 0 ? "pos" : "neg";
+    const pnlTxt = `${t.pnl >= 0 ? "+" : ""}$${t.pnl.toFixed(2)}`;
+    return `<div class="th-trade-row">
+      <span class="th-badge ${t.type === "LONG" ? "long" : "short"}">${t.type}</span>
+      <div class="th-trade-info">
+        <div class="th-trade-price">E: ${fmt(t.entry)} → X: ${fmt(t.exit)}</div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:1px;">${t.reason}</div>
+      </div>
+      <span class="th-trade-pnl ${pnlSign}">${pnlTxt}</span>
+    </div>`;
+  }).join("");
+}
+
+// ========================================================
+//  KEYBOARD SHORTCUTS OVERLAY
+// ========================================================
+function closeShortcuts() {
+  document.getElementById("shortcuts-overlay").classList.remove("open");
+}
+
+// ========================================================
+//  R:R BADGE
+// ========================================================
+function updateRRBadge() {
+  const badge = document.getElementById("rr-badge");
+  const rrVal = document.getElementById("rr-val");
+  if (!badge || !rrVal) return;
+
+  const entry = parseFloat(document.getElementById("trade-entry")?.value);
+  const sl = parseFloat(document.getElementById("trade-sl")?.value);
+  const tp = parseFloat(document.getElementById("trade-tp")?.value);
+
+  if (isNaN(entry) || isNaN(sl) || isNaN(tp) || sl <= 0 || tp <= 0) {
+    badge.classList.remove("visible", "good", "bad");
+    return;
+  }
+
+  const risk = Math.abs(entry - sl);
+  const reward = Math.abs(tp - entry);
+  if (!risk) { badge.classList.remove("visible", "good", "bad"); return; }
+
+  const rr = (reward / risk).toFixed(2);
+  rrVal.textContent = `1:${rr}`;
+  badge.classList.add("visible");
+  badge.classList.toggle("good", parseFloat(rr) >= 1.5);
+  badge.classList.toggle("bad",  parseFloat(rr) < 1.0);
+}
+
+// ========================================================
+//  SNAP OHLC
+// ========================================================
+let _shiftHeld = false;
+document.addEventListener("keydown", e => {
+  if (e.key === "Shift" && drawTool !== "cursor") {
+    _shiftHeld = true;
+    document.getElementById("snap-badge").classList.add("visible");
+  }
+});
+document.addEventListener("keyup", e => {
+  if (e.key === "Shift") {
+    _shiftHeld = false;
+    document.getElementById("snap-badge").classList.remove("visible");
+  }
+});
+
+function _snapToOHLC(time, price) {
+  if (!allCandles.length) return { time, price };
+  const snappedTime = snapTime(time);
+  const candle = allCandles.find(c => c.time === snappedTime);
+  if (!candle) return { time: snappedTime, price };
+  const ohlc = [candle.open, candle.high, candle.low, candle.close];
+  const snappedPrice = ohlc.reduce((best, v) => Math.abs(v - price) < Math.abs(best - price) ? v : best, ohlc[0]);
+  return { time: snappedTime, price: snappedPrice };
+}
+
+// ========================================================
 //  CHART INIT
 // ========================================================
 function initChart() {
   const container = document.getElementById("tv-chart");
   chart = LightweightCharts.createChart(container, {
     layout: {
-      background: { color: "#040508" },
-      textColor: "#aeb4c5",
+      background: { color: "#060810" },
+      textColor: "#64738A",
       fontFamily: "'JetBrains Mono', monospace",
       fontSize: 11,
     },
@@ -58,30 +327,30 @@ function initChart() {
       },
     },
     grid: {
-      vertLines: { color: "#0d111b", visible: true },
-      horzLines: { color: "#0d111b", visible: true },
+      vertLines: { color: "rgba(255,255,255,0.032)", visible: true },
+      horzLines: { color: "rgba(255,255,255,0.032)", visible: true },
     },
     crosshair: {
       mode: LightweightCharts.CrosshairMode.Normal,
       vertLine: {
-        color: "#2962ff",
+        color: "#3B82F6",
         width: 1,
         style: 1,
-        labelBackgroundColor: "#2962ff",
+        labelBackgroundColor: "#3B82F6",
       },
       horzLine: {
-        color: "#2962ff",
+        color: "#3B82F6",
         width: 1,
         style: 1,
-        labelBackgroundColor: "#2962ff",
+        labelBackgroundColor: "#3B82F6",
       },
     },
     rightPriceScale: {
-      borderColor: "#161a25",
+      borderColor: "rgba(255,255,255,0.052)",
       scaleMargins: { top: 0.1, bottom: 0.25 },
     },
     timeScale: {
-      borderColor: "#161a25",
+      borderColor: "rgba(255,255,255,0.052)",
       timeVisible: true,
       secondsVisible: false,
     },
@@ -96,11 +365,23 @@ function initChart() {
   volumeSeries = chart.addHistogramSeries({
     priceFormat: { type: "volume" },
     priceScaleId: "volume",
-    color: "#2962ff",
+    color: "#3B82F6",
+    visible: showVolume,
   });
   chart.priceScale("volume").applyOptions({
     scaleMargins: { top: 0.82, bottom: 0 },
   });
+
+  // Apply saved grid preference
+  if (!showGrid) {
+    chart.applyOptions({
+      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+    });
+  }
+
+  // Sync button states with loaded prefs
+  document.getElementById("btn-volume")?.classList.toggle("active", showVolume);
+  document.getElementById("btn-grid")?.classList.toggle("active", showGrid);
 
   // Crosshair tooltip
   chart.subscribeCrosshairMove(handleCrosshair);
@@ -128,30 +409,30 @@ function createMainSeries() {
   }
   if (currentType === "Candlestick") {
     mainSeries = chart.addCandlestickSeries({
-      upColor: "#0cf19b",
-      downColor: "#ff3c4c",
-      borderUpColor: "#0cf19b",
-      borderDownColor: "#ff3c4c",
-      wickUpColor: "#0cf19b",
-      wickDownColor: "#ff3c4c",
+      upColor: "#00C46E",
+      downColor: "#F2364A",
+      borderUpColor: "#00C46E",
+      borderDownColor: "#F2364A",
+      wickUpColor: "#00C46E",
+      wickDownColor: "#F2364A",
     });
   } else if (currentType === "Bar") {
     mainSeries = chart.addBarSeries({
-      upColor: "#0cf19b",
-      downColor: "#ff3c4c",
+      upColor: "#00C46E",
+      downColor: "#F2364A",
     });
   } else if (currentType === "Line") {
     mainSeries = chart.addLineSeries({
-      color: "#2962ff",
+      color: "#3B82F6",
       lineWidth: 2,
       crosshairMarkerVisible: true,
       crosshairMarkerRadius: 4,
     });
   } else if (currentType === "Area") {
     mainSeries = chart.addAreaSeries({
-      lineColor: "#2962ff",
-      topColor: "rgba(41,98,255, 0.3)",
-      bottomColor: "rgba(41,98,255, 0.01)",
+      lineColor: "#3B82F6",
+      topColor: "rgba(59,130,246,0.22)",
+      bottomColor: "rgba(59,130,246,0.01)",
       lineWidth: 2,
     });
   }
@@ -163,10 +444,10 @@ function createMainSeries() {
 function setChartType(type) {
   currentType = type;
   const mapIcon = {
-    Candlestick: "🕯️ Chandeliers",
-    Bar: "📊 Barres",
-    Line: "📈 Ligne",
-    Area: "🌊 Aire",
+    Candlestick: "Chandeliers",
+    Bar: "Barres",
+    Line: "Ligne",
+    Area: "Aire",
   };
   const labelEl = document.getElementById("label-active-ctype");
   if (labelEl) labelEl.textContent = mapIcon[type];
@@ -189,6 +470,7 @@ function toggleVolume() {
   showVolume = !showVolume;
   if (volumeSeries) volumeSeries.applyOptions({ visible: showVolume });
   document.getElementById("btn-volume").classList.toggle("active", showVolume);
+  savePrefs();
 }
 
 function toggleGrid() {
@@ -200,6 +482,7 @@ function toggleGrid() {
     },
   });
   document.getElementById("btn-grid").classList.toggle("active", showGrid);
+  savePrefs();
 }
 
 function fitContent() {
@@ -239,12 +522,12 @@ function ensureTooltipDOM() {
   if (_ttBuilt) return;
   const tt = domRefs().tooltip;
   tt.innerHTML = `
-    <div class="tt-date" style="color:var(--text-muted);margin-bottom:6px;font-size:10px"></div>
+    <div class="tt-date"></div>
     <div class="tt-row"><span class="tt-label">O</span><span class="tt-val tt-o"></span></div>
-    <div class="tt-row"><span class="tt-label">H</span><span class="tt-val tt-h" style="color:var(--green)"></span></div>
-    <div class="tt-row"><span class="tt-label">L</span><span class="tt-val tt-l" style="color:var(--red)"></span></div>
+    <div class="tt-row"><span class="tt-label">H</span><span class="tt-val tt-h" style="color:var(--bull)"></span></div>
+    <div class="tt-row"><span class="tt-label">L</span><span class="tt-val tt-l" style="color:var(--bear)"></span></div>
     <div class="tt-row"><span class="tt-label">C</span><span class="tt-val tt-c"></span></div>
-    <div class="tt-row"><span class="tt-label">Var</span><span class="tt-val tt-change tt-chg"></span></div>
+    <div class="tt-row"><span class="tt-label">Var</span><span class="tt-val tt-chg"></span></div>
   `;
   _ttDate = tt.querySelector(".tt-date");
   _ttO = tt.querySelector(".tt-o");
@@ -300,7 +583,7 @@ function handleCrosshair(param) {
   _ttL.textContent = fmt(L);
   _ttC.textContent = fmt(C);
   _ttChg.textContent = chgStr;
-  _ttChg.className = "tt-val tt-change " + (chg >= 0 ? "up" : "down");
+  _ttChg.className = "tt-val tt-chg tt-change " + (chg >= 0 ? "up" : "down");
 
   tooltip.style.display = "block";
   const rect = chartContainer.getBoundingClientRect();
@@ -313,31 +596,25 @@ function handleCrosshair(param) {
   tooltip.style.left = x + "px";
   tooltip.style.top = y + "px";
 
-  // Update topbar OHLCV
-  setOHLCV(O, H, L, C, chg);
 }
 
 // ========================================================
 //  INDICATORS
 // ========================================================
 let customIndicators = [];
-const IND_COLORS = ["#ff9800", "#2196f3", "#9c27b0", "#4caf50", "#e91e63", "#00bcd4", "#8bc34a"];
 
 function updateIndMenu() {
   const cont = document.getElementById("active-indicators-list");
   if (!customIndicators.length) {
-    cont.innerHTML = `<div style="padding: 10px; font-size: 12px; color: var(--text-muted); font-style: italic;">Aucun indicateur</div>`;
+    cont.innerHTML = `<div style="padding:8px 10px;font-size:11.5px;color:var(--text-muted);font-style:italic;">Aucun indicateur</div>`;
     return;
   }
   cont.innerHTML = customIndicators.map(ind => `
-    <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 16px; border-bottom: 1px solid var(--border-light);">
-      <div style="display:flex; align-items:center; gap:8px;">
-         <span style="display:inline-block; width:10px; height:10px; background:${ind.color}; border-radius:50%"></span>
-         <span style="font-size:12px;">${ind.type} ${ind.period}</span>
-      </div>
-      <button onclick="removeIndicator('${ind.id}')" style="background:transparent; border:none; color:var(--red); cursor:pointer; font-size:14px;">✕</button>
-    </div>
-  `).join("");
+    <div class="ind-item">
+      <span class="ind-item-dot" style="background:${ind.color}"></span>
+      <span class="ind-item-label">${ind.type}(${ind.period})</span>
+      <button class="ind-item-remove" onclick="removeIndicator('${ind.id}')">✕</button>
+    </div>`).join("");
 }
 
 function adjustPanes() {
@@ -390,22 +667,7 @@ function adjustPanes() {
 }
 
 function promptAddIndicator(type) {
-  const defaultPeriod = type === "RSI" ? 14 : (type === "SMA" ? 20 : 50);
-  const p = prompt(`Ajouter ${type}\\nEntrez la période souhaitée (ex: ${defaultPeriod}):`, defaultPeriod);
-  if (!p) return;
-  const period = parseInt(p, 10);
-  if (isNaN(period) || period <= 0) return alert("Période invalide");
-
-  const id = Date.now().toString();
-  const color = IND_COLORS[customIndicators.length % IND_COLORS.length];
-
-  const ind = { id, type, period, color, series: null };
-  customIndicators.push(ind);
-
-  updateIndMenu();
-  if (allCandles && allCandles.length) {
-    renderIndicators(allCandles);
-  }
+  openIndicatorModal(type);
 }
 
 function removeIndicator(id) {
@@ -552,8 +814,8 @@ function renderChart(candles) {
 
   // Volume — pre-allocate, avoid .map()
   const volData = new Array(n);
-  const upColor = "rgba(0,200,150,0.5)",
-    downColor = "rgba(255,68,102,0.5)";
+  const upColor = "rgba(0,196,110,0.50)",
+    downColor = "rgba(242,54,74,0.50)";
   for (let i = 0; i < n; i++) {
     volData[i] = {
       time: candles[i].time,
@@ -572,11 +834,6 @@ function renderChart(candles) {
     if (candles[i].high > hi) hi = candles[i].high;
     if (candles[i].low < lo) lo = candles[i].low;
   }
-  const firstClose = candles[0].close;
-  const lastClose = candles[n - 1].close;
-  const totalChg =
-    firstClose > 0 ? ((lastClose - firstClose) / firstClose) * 100 : 0;
-
   const dom = domRefs();
 
   // Status
@@ -594,27 +851,17 @@ function renderChart(candles) {
 
   // Render indicators
   renderIndicators(candles);
+  // Load persisted drawings after first data render
+  loadDrawings();
+  drawRedraw();
+  savePrefs();
+  showToast(`${currentSymbol} — ${n.toLocaleString("fr-FR")} bougies chargées`, "success", 3000);
 }
 
 function dateFromTime(t) {
   if (typeof t === "number")
     return new Date(t * 1000).toLocaleDateString("fr-FR");
   return String(t);
-}
-
-function renderTable(candles) {
-  // table removed
-}
-
-function highlightCandle(idx) {
-  if (!allCandles[idx]) return;
-  const c = allCandles[idx];
-  chart.timeScale().scrollToPosition(0, false);
-  setOHLCV(c.open, c.high, c.low, c.close, ((c.close - c.open) / c.open) * 100);
-}
-
-function setOHLCV(o, h, l, c, chg) {
-  // Navigation topbar ohlcv has been removed.
 }
 
 // Fast number formatter — avoids toLocaleString (100x slower than manual)
@@ -850,8 +1097,11 @@ function autoMatch(header, field) {
 }
 
 function showError(msg) {
-  document.getElementById("drop-filename").textContent = "❌ " + msg;
-  document.getElementById("modal-drop").style.borderColor = "var(--red)";
+  showToast(msg, "error");
+  const dropEl = document.getElementById("drop-filename");
+  if (dropEl) dropEl.textContent = "Erreur — " + msg;
+  const dropModal = document.getElementById("modal-drop");
+  if (dropModal) dropModal.style.borderColor = "var(--bear)";
 }
 
 // ========================================================
@@ -1074,12 +1324,12 @@ function _parseCSVMainThread(
       hideProgress();
     } catch (err) {
       hideProgress();
-      alert("Erreur parsing: " + err.message);
+      showToast("Erreur parsing : " + err.message, "error");
     }
   };
   reader.onerror = () => {
     hideProgress();
-    alert("Erreur de lecture du fichier.");
+    showToast("Erreur de lecture du fichier.", "error");
   };
   reader.readAsText(file);
 }
@@ -1100,7 +1350,7 @@ function importData() {
   ).toUpperCase();
 
   if (!dateCol || !openCol || !highCol || !lowCol || !closeCol) {
-    alert("Veuillez associer toutes les colonnes obligatoires (*)");
+    showToast("Veuillez associer toutes les colonnes obligatoires (*)", "warning");
     return;
   }
 
@@ -1124,7 +1374,7 @@ function importData() {
         if (!candles.length) throw new Error("Aucune donnée valide");
         renderChart(candles);
       } catch (e) {
-        alert(e.message);
+        showToast(e.message, "error");
       } finally {
         showLoading(false);
       }
@@ -1275,12 +1525,12 @@ function importData() {
         hideProgress();
       } catch (err) {
         hideProgress();
-        alert(err.message);
+        showToast(err.message, "error");
       }
     }
   };
 
-  activeWorker.onerror = (err) => {
+  activeWorker.onerror = (_err) => {
     activeWorker.terminate();
     activeWorker = null;
     hideProgress();
@@ -1316,12 +1566,12 @@ function importData() {
       });
     } catch (err) {
       hideProgress();
-      alert("Erreur d'envoi au worker: " + err.message);
+      showToast("Erreur d'envoi au worker : " + err.message, "error");
     }
   };
   fileReader.onerror = () => {
     hideProgress();
-    alert("Erreur de lecture du fichier.");
+    showToast("Erreur de lecture du fichier.", "error");
   };
   fileReader.readAsText(pendingFile);
 }
@@ -1341,28 +1591,6 @@ function showProgress(pct, label) {
                     <div id="pp-pct">0%</div>
                     <button id="pp-cancel" onclick="cancelImport()">Annuler</button>
                   </div>`;
-    // Styles — injectés une seule fois (évite N balises <style> dupliquées après N imports)
-    if (!document.getElementById("pp-styles")) {
-      const s = document.createElement("style");
-      s.id = "pp-styles";
-      s.textContent = `
-                  #parse-progress { position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center; }
-                  #pp-backdrop { position:absolute;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px); }
-                  #pp-box { position:relative;background:#1e2438;border:1px solid #2a3352;border-radius:14px;
-                    padding:32px 40px;min-width:380px;text-align:center;box-shadow:0 16px 48px rgba(0,0,0,.5); }
-                  #pp-icon { font-size:40px;margin-bottom:12px;animation:spin .8s linear infinite;display:inline-block; }
-                  #pp-label { color:#8892a4;font-size:13px;margin-bottom:16px;font-family:'Inter',sans-serif; }
-                  #pp-track { background:#1a1f2e;border-radius:8px;height:8px;overflow:hidden;margin-bottom:8px; }
-                  #pp-fill { height:100%;background:linear-gradient(90deg,#4c7aff,#a855f7);border-radius:8px;
-                    transition:width .2s ease;width:0%; }
-                  #pp-pct { font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;
-                    color:#e8ecf4;margin-bottom:16px; }
-                  #pp-cancel { background:transparent;border:1px solid #2a3352;color:#8892a4;
-                    padding:6px 20px;border-radius:6px;cursor:pointer;font-family:'Inter',sans-serif;font-size:12px; }
-                  #pp-cancel:hover { border-color:#ff4466;color:#ff4466; }
-                `;
-      document.head.appendChild(s);
-    }
     document.body.appendChild(bar);
   }
   document.getElementById("pp-label").textContent = label || "Chargement…";
@@ -1457,7 +1685,7 @@ function loadSampleData() {
       const candles = generateSampleCandles("2024-01-01", 300, 42000, 0.025);
       renderChart(candles);
     } catch (e) {
-      alert("Erreur chargement démo: " + e.message);
+      showToast("Erreur chargement démo : " + e.message, "error");
     } finally {
       showLoading(false);
     }
@@ -1495,7 +1723,7 @@ function generateSampleCandles(startDate, count, basePrice, volatility) {
 // ========================================================
 function exportCSV() {
   if (!allCandles.length) {
-    alert("Aucune donnée à exporter");
+    showToast("Aucune donnée à exporter", "warning");
     return;
   }
   const header = "time,open,high,low,close,volume\n";
@@ -1507,6 +1735,7 @@ function exportCSV() {
   a.href = URL.createObjectURL(blob);
   a.download = `${currentSymbol}_data.csv`;
   a.click();
+  showToast(`${currentSymbol}_data.csv exporté`, "success", 2500);
 }
 
 // ========================================================
@@ -1876,7 +2105,7 @@ function switchTF(tfSec, tfType, btn) {
       aggWorker = null;
       URL.revokeObjectURL(url); // Évite la fuite mémoire: Blob URL orphelin si erreur worker
       clearStatusAgg();
-      alert("Erreur agrégation: " + err.message);
+      showToast("Erreur agrégation : " + err.message, "error");
     };
     // Slice arrays up to the current replay index if replay is active
     const endIdx = replay.active ? replay.idx + 1 : baseFlatTimes.length;
@@ -1940,10 +2169,10 @@ let selectedDrawing = null;
 let drawCanvas, drawCtx;
 const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 const DRAW_COLORS = {
-  default: "#4c7aff",
-  fib: "#ffb443",
-  rect: "rgba(76,122,255,0.12)",
-  sel: "#00c896",
+  default: "#3B82F6",
+  fib:     "#F59E0B",
+  rect:    "rgba(59,130,246,0.10)",
+  sel:     "#00C46E",
 };
 
 function initDrawCanvas() {
@@ -2343,59 +2572,31 @@ function onCursorContainerDblClick(e) {
 }
 
 function showDrawCtxMenu(cx, cy, drawing) {
-  let menu = document.getElementById("draw-ctx-menu");
-  if (!menu) {
-    menu = document.createElement("div");
-    menu.id = "draw-ctx-menu";
-    const s = document.createElement("style");
-    s.textContent = `
-                  #draw-ctx-menu { position:fixed;z-index:5000;background:#1e2438;border:1px solid #2a3352;
-                    border-radius:10px;padding:4px 0;box-shadow:0 8px 28px rgba(0,0,0,.6);min-width:170px;
-                    font-family:'Inter',sans-serif; }
-                  #draw-ctx-menu .ctx-title { padding:6px 14px 2px;font-size:10px;color:#4a5568;
-                    text-transform:uppercase;letter-spacing:.08em; }
-                  #draw-ctx-menu button { display:flex;align-items:center;gap:8px;width:100%;border:none;
-                    background:transparent;color:#c8d0e0;padding:8px 14px;cursor:pointer;font-size:12px;text-align:left; }
-                  #draw-ctx-menu button:hover { background:#2a3352;color:#fff; }
-                  #draw-ctx-menu .ctx-sep { height:1px;background:#2a3352;margin:3px 0; }
-                  #draw-ctx-menu .ctx-colors { display:flex;gap:6px;padding:8px 14px;flex-wrap:wrap; }
-                  #draw-ctx-menu .ctx-color-dot { width:18px;height:18px;border-radius:50%;cursor:pointer;
-                    border:2px solid transparent;transition:transform .1s; }
-                  #draw-ctx-menu .ctx-color-dot:hover { border-color:#fff;transform:scale(1.2); }
-                  #draw-ctx-menu .ctx-hint { padding:2px 14px 6px;font-size:10px;color:#4a5568;font-style:italic; }
-                `;
-    document.head.appendChild(s);
-    document.body.appendChild(menu);
-  }
-  const colors = [
-    "#4c7aff",
-    "#00c896",
-    "#ffb443",
-    "#ff4466",
-    "#a855f7",
-    "#ffffff",
-    "#00d4ff",
-    "#ff8c00",
-  ];
+  const menu = document.getElementById("draw-ctx-menu");
+  if (!menu) return;
+  const colors = ["#3B82F6","#00C46E","#F59E0B","#F2364A","#A855F7","#ffffff","#00D4FF","#FF8C00"];
+  const activeColor = drawing.color || "#3B82F6";
   menu.innerHTML = `
-              <div class="ctx-title">✏️ Mode édition</div>
-              <div class="ctx-hint">Glissez les poignées ◯ pour modifier</div>
-              <div class="ctx-sep"></div>
-              <div class="ctx-title">Couleur</div>
-              <div class="ctx-colors">
-                ${colors.map((c) => `<div class="ctx-color-dot" style="background:${c};border-color:${(drawing.color || "#4c7aff") === c ? "#fff" : "transparent"}" onclick="window._ctxColorDrawing('${c}')"></div>`).join("")}
-              </div>
-              <div class="ctx-sep"></div>
-              <button onclick="window._ctxDeleteDrawing()">🗑 Supprimer</button>
-              <button onclick="exitEditMode()">✕ Quitter l'édition</button>
-            `;
-  const vw = window.innerWidth,
-    vh = window.innerHeight;
-  let left = cx + 12,
-    top = cy + 12;
+    <div class="ctx-section-label">Mode édition</div>
+    <div class="ctx-hint">Glissez les ◯ pour modifier</div>
+    <div class="ctx-sep"></div>
+    <div class="ctx-section-label">Couleur</div>
+    <div class="ctx-colors">
+      ${colors.map(c => `<div class="ctx-color-dot${c === activeColor ? " active" : ""}" style="background:${c}" onclick="window._ctxColorDrawing('${c}')"></div>`).join("")}
+    </div>
+    <div class="ctx-sep"></div>
+    <button onclick="window._ctxDeleteDrawing()" class="ctx-danger">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      Supprimer
+    </button>
+    <button onclick="exitEditMode()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      Quitter l'édition
+    </button>`;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let left = cx + 12, top = cy + 12;
   menu.style.display = "block";
-  const mw = menu.offsetWidth || 175,
-    mh = menu.offsetHeight || 180;
+  const mw = menu.offsetWidth || 196, mh = menu.offsetHeight || 200;
   if (left + mw > vw - 8) left = cx - mw - 8;
   if (top + mh > vh - 8) top = cy - mh - 8;
   menu.style.left = left + "px";
@@ -2410,10 +2611,12 @@ function hideDrawCtxMenu() {
 window._ctxDeleteDrawing = function () {
   const target = editingDrawing || selectedDrawing;
   if (!target) return;
+  _pushUndo();
   drawings = drawings.filter((d) => d.id !== target.id);
   selectedDrawing = null;
-  exitEditMode(); // also hides menu
+  exitEditMode();
   drawRedraw();
+  saveDrawings();
 };
 window._ctxColorDrawing = function (color) {
   const target = editingDrawing || selectedDrawing;
@@ -2482,18 +2685,25 @@ function onDrawMouseDown(e) {
   }
   if (needsTwo(drawTool)) {
     if (drawPts.length === 0) {
+      if (_shiftHeld) { const s = _snapToOHLC(pt.time, pt.price); pt.time = s.time; pt.price = s.price; }
       drawPts.push(pt);
     } else {
-      drawings.push({ type: drawTool, pts: [drawPts[0], pt], id: Date.now() });
+      if (_shiftHeld) { const s = _snapToOHLC(pt.time, pt.price); pt.time = s.time; pt.price = s.price; }
+      _pushUndo();
+      drawings.push({ type: drawTool, pts: [drawPts[0], pt], id: _nextDrawId(), color: DRAW_COLORS.default });
       drawPts = [];
       drawPreview = null;
       drawRedraw();
+      saveDrawings();
       setDrawTool("cursor");
     }
   } else {
-    drawings.push({ type: drawTool, pts: [pt], id: Date.now() });
+    if (_shiftHeld) { const s = _snapToOHLC(pt.time, pt.price); pt.time = s.time; pt.price = s.price; }
+    _pushUndo();
+    drawings.push({ type: drawTool, pts: [pt], id: _nextDrawId(), color: DRAW_COLORS.default });
     drawPts = [];
     drawRedraw();
+    saveDrawings();
     setDrawTool("cursor");
   }
 }
@@ -2604,11 +2814,16 @@ function onDrawMouseMove(e) {
 
   // Normal drawing preview
   if (!drawPts.length) return;
-  drawPreview = fromXY(mx, my);
+  let preview = fromXY(mx, my);
+  if (_shiftHeld && preview.time) {
+    const snapped = _snapToOHLC(preview.time, preview.price);
+    preview = { time: snapped.time, price: snapped.price };
+  }
+  drawPreview = preview;
   drawRedraw();
 }
 
-function onDrawMouseUp(e) {
+function onDrawMouseUp(_e) {
   if (editDragging) {
     // Normalize rect corners ONLY when drag finishes (not mid-drag)
     if (editingDrawing && editingDrawing.type === "rect")
@@ -2616,6 +2831,7 @@ function onDrawMouseUp(e) {
     editDragging = false;
     editHandle = null;
     drawCanvas.style.cursor = editingDrawing ? "default" : "";
+    saveDrawings();
   }
 }
 
@@ -2698,17 +2914,21 @@ function distToSeg(px, py, ax, ay, bx, by) {
 
 function deleteSelectedDrawing() {
   if (!selectedDrawing) return;
+  _pushUndo();
   drawings = drawings.filter((d) => d.id !== selectedDrawing.id);
   selectedDrawing = null;
   drawRedraw();
+  saveDrawings();
 }
 
 function clearAllDrawings() {
+  if (drawings.length) _pushUndo();
   drawings = [];
   selectedDrawing = null;
   drawPts = [];
   drawPreview = null;
   drawRedraw();
+  saveDrawings();
 }
 
 function drawRedraw() {
@@ -2735,7 +2955,7 @@ function drawShape(d, selected, W, H, preview) {
   drawCtx.save();
   const isEditing = d === editingDrawing;
   const baseColor = isEditing
-    ? "#00e5ff"
+    ? "#60A5FA"
     : selected
       ? DRAW_COLORS.sel
       : d.color || DRAW_COLORS.default;
@@ -2847,8 +3067,8 @@ function drawShape(d, selected, W, H, preview) {
       drawCtx.save();
       drawCtx.beginPath();
       drawCtx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2);
-      drawCtx.fillStyle = "#1e2438";
-      drawCtx.strokeStyle = "#00e5ff";
+      drawCtx.fillStyle = "#0D1117";
+      drawCtx.strokeStyle = "#3B82F6";
       drawCtx.lineWidth = 1.5;
       drawCtx.fill();
       drawCtx.stroke();
@@ -2888,8 +3108,11 @@ function showTextInput(x, y, pt) {
   input.onkeydown = (e) => {
     if (e.key === "Enter") {
       const txt = input.value.trim();
-      if (txt)
-        drawings.push({ type: "text", pts: [pt], text: txt, id: Date.now() });
+      if (txt) {
+        _pushUndo();
+        drawings.push({ type: "text", pts: [pt], text: txt, id: _nextDrawId(), color: DRAW_COLORS.default });
+        saveDrawings();
+      }
       overlay.style.display = "none";
       drawPts = [];
       drawRedraw();
@@ -3017,6 +3240,7 @@ function setSeparatorTF(tfLabel) {
 //  INIT
 // ========================================================
 window.addEventListener("DOMContentLoaded", () => {
+  loadPrefs();
   initChart();
   initDrawCanvas();
   setupPositionDrag();
@@ -3043,7 +3267,7 @@ function _updateAllTradeMarkers() {
     markers.push({
       time: p.time,
       position: p.type === 'LONG' ? 'belowBar' : 'aboveBar',
-      color: p.type === 'LONG' ? '#2962ff' : '#f0b90b',
+      color: p.type === 'LONG' ? '#3B82F6' : '#F59E0B',
       shape: p.type === 'LONG' ? 'arrowUp' : 'arrowDown',
       text: p.type === 'LONG' ? 'Buy ' + p.qty : 'Sell ' + p.qty
     });
@@ -3143,7 +3367,7 @@ function setupPositionDrag() {
       if (!p.slLine) {
         p.slLine = mainSeries.createPriceLine({
           price: newPrice,
-          color: "#ff4466",
+          color: "#F2364A",
           lineWidth: 1,
           lineStyle: 2,
           axisLabelVisible: true,
@@ -3160,7 +3384,7 @@ function setupPositionDrag() {
       if (!p.tpLine) {
         p.tpLine = mainSeries.createPriceLine({
           price: newPrice,
-          color: "#00c896",
+          color: "#00C46E",
           lineWidth: 1,
           lineStyle: 2,
           axisLabelVisible: true,
@@ -3234,16 +3458,16 @@ function removeTradeLines() {
 function _drawTradeLines(p, title) {
   p.entryLine = mainSeries.createPriceLine({
     price: p.entry,
-    color: p.type === "LONG" ? "#2962ff" : "#f0b90b",
+    color: p.type === "LONG" ? "#3B82F6" : "#F59E0B",
     lineWidth: 1,
-    lineStyle: 2, // Dashed
+    lineStyle: 2,
     axisLabelVisible: true,
-    title: `${title} ${p.qty}`,
+    title: `${title} ×${p.qty}`,
   });
   if (p.sl) {
     p.slLine = mainSeries.createPriceLine({
       price: p.sl,
-      color: "#ff3c4c",
+      color: "#F2364A",
       lineWidth: 1,
       lineStyle: 2,
       axisLabelVisible: true,
@@ -3253,7 +3477,7 @@ function _drawTradeLines(p, title) {
   if (p.tp) {
     p.tpLine = mainSeries.createPriceLine({
       price: p.tp,
-      color: "#0cf19b",
+      color: "#00C46E",
       lineWidth: 1,
       lineStyle: 2,
       axisLabelVisible: true,
@@ -3279,21 +3503,21 @@ function executeTrade(type) {
   // Validate SL and TP logic constraints
   if (sl !== null) {
     if (type === "LONG" && sl >= entry) {
-      alert("Erreur: Pour un LONG (Achat), le Stop Loss doit être INFÉRIEUR au prix d'entrée.");
+      showToast("SL invalide — pour un LONG, le Stop Loss doit être sous le prix d'entrée.", "error");
       return;
     }
     if (type === "SHORT" && sl <= entry) {
-      alert("Erreur: Pour un SHORT (Vente), le Stop Loss doit être SUPÉRIEUR au prix d'entrée.");
+      showToast("SL invalide — pour un SHORT, le Stop Loss doit être au-dessus du prix d'entrée.", "error");
       return;
     }
   }
   if (tp !== null) {
     if (type === "LONG" && tp <= entry) {
-      alert("Erreur: Pour un LONG (Achat), le Take Profit doit être SUPÉRIEUR au prix d'entrée.");
+      showToast("TP invalide — pour un LONG, le Take Profit doit être au-dessus du prix d'entrée.", "error");
       return;
     }
     if (type === "SHORT" && tp >= entry) {
-      alert("Erreur: Pour un SHORT (Vente), le Take Profit doit être INFÉRIEUR au prix d'entrée.");
+      showToast("TP invalide — pour un SHORT, le Take Profit doit être sous le prix d'entrée.", "error");
       return;
     }
   }
@@ -3326,6 +3550,8 @@ function executeTrade(type) {
   document.getElementById("btn-close-pos").textContent = "Fermer Tout";
 
   updateSimUI(currentData.close);
+  const isLimit = entry !== currentData.close;
+  showToast(`${type} ${isLimit ? "LIMIT " : ""}@${fmt(entry)} ×${qty}`, "info", 2500);
 }
 
 function cancelPending(id = null) {
@@ -3363,6 +3589,9 @@ function closePosition(reason, closePrice = null, id = null) {
   _removeLinesFrom(pos);
   tradeSim.positions.splice(idx, 1);
   _updateAllTradeMarkers();
+  updateTradeHistoryPanel();
+  const pnlSign = pnl >= 0 ? "success" : "error";
+  showToast(`Position fermée — ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} (${reason})`, pnlSign, 3500);
   if (tradeSim.positions.length === 0 && tradeSim.pendingOrders.length === 0) {
     document.getElementById("btn-close-pos").style.display = "none";
     document.getElementById("trade-sl").value = "";
@@ -3387,7 +3616,7 @@ const replay = {
 
 function startReplayMode() {
   if (!baseCandles || baseCandles.length < 2) {
-    alert("Chargez des données avant de lancer le replay.");
+    showToast("Importez des données avant de lancer le replay.", "warning");
     return;
   }
 
@@ -3480,7 +3709,7 @@ function startReplayMode() {
       if (pickLine) pickLine.style.display = "none";
       beginReplay(best);
     } else {
-      alert("Cliquez sur une bougie valide.");
+      showToast("Cliquez sur une bougie valide pour démarrer le replay.", "info", 2500);
     }
   };
 
@@ -3535,7 +3764,6 @@ function _updateReplaySeries() {
       closePrice = c.close,
       v = c.volume || 0;
     const bucketTime = getCalendarBucket(c.time, activeTFType, activeTF);
-    let foundStart = false;
     for (let i = replay.idx - 1; i >= replay.startIdx; i--) { // borné à startIdx: évite les données "futures"
       const bCandle = baseCandles[i];
       if (
@@ -3569,7 +3797,7 @@ function _updateReplaySeries() {
       time: bar.time,
       value: bar.volume || 0,
       color:
-        bar.close >= bar.open ? "rgba(0,200,150,0.5)" : "rgba(255,68,102,0.5)",
+        bar.close >= bar.open ? "rgba(0,196,110,0.50)" : "rgba(242,54,74,0.50)",
     });
   }
 
@@ -3764,7 +3992,18 @@ function fmtDate(t) {
 function exitReplay() {
   rpPause();
 
+  // Show replay summary before resetting
+  if (tradeSim.history.length) {
+    const wins = tradeSim.history.filter(t => t.pnl > 0).length;
+    const total = tradeSim.history.length;
+    const pnl = tradeSim.history.reduce((s, t) => s + t.pnl, 0);
+    const pnlStr = `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`;
+    const type = pnl >= 0 ? "success" : "error";
+    showToast(`Session terminée — ${total} trades · W:${wins}/${total} · P&L ${pnlStr}`, type, 5000);
+  }
+
   // Close any open position and reset trading simulator
+  if (_tradeHistoryOpen) toggleTradeHistory();
   removeTradeLines();
   tradeSim.positions = [];
   tradeSim.pendingOrders = [];
@@ -3848,6 +4087,12 @@ document.addEventListener("DOMContentLoaded", () => {
       replay.speed = parseFloat(btn.dataset.speed);
     });
   });
+
+  // R:R badge — update on any input change in trade panel
+  ["trade-entry", "trade-sl", "trade-tp"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", updateRRBadge);
+  });
 });
 
 // ========================================================
@@ -3875,6 +4120,14 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (e.key === "Escape") {
+    if (document.getElementById("indicator-modal").classList.contains("open")) {
+      closeIndicatorModal();
+      return;
+    }
+    if (document.getElementById("shortcuts-overlay").classList.contains("open")) {
+      closeShortcuts();
+      return;
+    }
     if (replay.picking || replay.active) {
       exitReplay();
       return;
@@ -3896,6 +4149,14 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     fitContent();
   }
+  if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+    e.preventDefault();
+    undo();
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "z"))) {
+    e.preventDefault();
+    redo();
+  }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (document.activeElement.tagName !== "INPUT") {
       if (editingDrawing) {
@@ -3905,12 +4166,16 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (!e.ctrlKey && !e.metaKey && !e.altKey && !replay.active) {
-    if (e.key === "1") setDrawTool("cursor");
-    if (e.key === "2") setDrawTool("trendline");
-    if (e.key === "3") setDrawTool("hline");
-    if (e.key === "4") setDrawTool("vline");
-    if (e.key === "5") setDrawTool("rect");
-    if (e.key === "6") setDrawTool("fib");
-    if (e.key === "7") setDrawTool("text");
+    if (document.activeElement.tagName !== "INPUT") {
+      if (e.key === "1") setDrawTool("cursor");
+      if (e.key === "2") setDrawTool("trendline");
+      if (e.key === "3") setDrawTool("hline");
+      if (e.key === "4") setDrawTool("vline");
+      if (e.key === "5") setDrawTool("rect");
+      if (e.key === "6") setDrawTool("fib");
+      if (e.key === "7") setDrawTool("text");
+      if (e.key === "r" || e.key === "R") setDrawTool("ray");
+      if (e.key === "?") document.getElementById("shortcuts-overlay").classList.add("open");
+    }
   }
 });
