@@ -2975,8 +2975,15 @@ function onDrawMouseMove(e) {
   if (!drawPts.length) return;
   let preview = fromXY(mx, my);
   if (_shiftHeld && preview.time) {
+    // Snap mode: force to nearest OHLC — pixel coords follow the snap, not the mouse
     const snapped = _snapToOHLC(preview.time, preview.price);
     preview = { time: snapped.time, price: snapped.price };
+  } else {
+    // Normal mode: store raw pixel coords to avoid lossy pixel→time→pixel round-trip.
+    // LightweightCharts coordinateToTime() snaps to the nearest bar centre,
+    // so re-converting through timeToCoordinate() introduces a systematic offset.
+    preview._x = mx;
+    preview._y = my;
   }
   drawPreview = preview;
   drawRedraw();
@@ -3152,7 +3159,12 @@ function drawShape(d, selected, W, H, preview) {
   drawCtx.setLineDash(preview ? [6, 4] : []);
 
   const p0 = d.pts[0] ? toXY(d.pts[0].time, d.pts[0].price) : null;
-  const p1 = d.pts[1] ? toXY(d.pts[1].time, d.pts[1].price) : null;
+  // Use raw pixel coords when available (preview mode) to avoid snap-induced offset
+  const p1 = d.pts[1]
+    ? (d.pts[1]._x !== undefined
+        ? { x: d.pts[1]._x, y: d.pts[1]._y }
+        : toXY(d.pts[1].time, d.pts[1].price))
+    : null;
 
   if (d.type === "hline") {
     const yy = mainSeries ? mainSeries.priceToCoordinate(d.pts[0].price) : null;
