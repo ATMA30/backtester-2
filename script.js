@@ -593,8 +593,10 @@ function handleCrosshair(param) {
   if (y < 4) y = 4;
   if (y + tooltip.offsetHeight > rect.height - 4)
     y = rect.height - tooltip.offsetHeight - 4;
-  tooltip.style.left = x + "px";
-  tooltip.style.top = y + "px";
+  tooltip.style.position = "absolute";
+  tooltip.style.left = "0";
+  tooltip.style.top = "0";
+  tooltip.style.transform = `translate(${x}px, ${y}px)`;
 
 }
 
@@ -602,6 +604,18 @@ function handleCrosshair(param) {
 //  INDICATORS
 // ========================================================
 let customIndicators = [];
+const _indicatorCache = new Map(); // Cache: "type:period:candlesHash" → result
+
+function _getCacheKey(type, period, candlesHash) {
+  return `${type}:${period}:${candlesHash}`;
+}
+
+function _hashCandles(candles) {
+  // Fast hash: first, middle, last candle close + length
+  // Unlikely to collide in normal trading (timeframe changes invalidate cache)
+  if (!candles?.length) return "0";
+  return `${candles.length}:${candles[0].close}:${candles[Math.floor(candles.length/2)].close}:${candles[candles.length-1].close}`;
+}
 
 function updateIndMenu() {
   const cont = document.getElementById("active-indicators-list");
@@ -683,6 +697,9 @@ function removeIndicator(id) {
 }
 
 function computeSMA(data, period) {
+  const cacheKey = _getCacheKey("SMA", period, _hashCandles(data));
+  if (_indicatorCache.has(cacheKey)) return _indicatorCache.get(cacheKey);
+
   const res = [];
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
@@ -690,10 +707,14 @@ function computeSMA(data, period) {
     if (i >= period) sum -= data[i - period].close;
     if (i >= period - 1) res.push({ time: data[i].time, value: sum / period });
   }
+  _indicatorCache.set(cacheKey, res);
   return res;
 }
 
 function computeEMA(data, period) {
+  const cacheKey = _getCacheKey("EMA", period, _hashCandles(data));
+  if (_indicatorCache.has(cacheKey)) return _indicatorCache.get(cacheKey);
+
   const res = [];
   if (data.length < period) return res;
   // Seed avec SMA des `period` premières valeurs (convention standard — évite le biais de démarrage)
@@ -706,10 +727,14 @@ function computeEMA(data, period) {
     ema = (data[i].close - ema) * k + ema;
     res.push({ time: data[i].time, value: ema });
   }
+  _indicatorCache.set(cacheKey, res);
   return res;
 }
 
 function computeRSI(data, period) {
+  const cacheKey = _getCacheKey("RSI", period, _hashCandles(data));
+  if (_indicatorCache.has(cacheKey)) return _indicatorCache.get(cacheKey);
+
   const res = [];
   if (data.length <= period) return res;
   let gains = 0, losses = 0;
@@ -732,6 +757,7 @@ function computeRSI(data, period) {
     rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
     res.push({ time: data[i].time, value: 100 - (100 / (1 + rs)) });
   }
+  _indicatorCache.set(cacheKey, res);
   return res;
 }
 
@@ -2021,6 +2047,7 @@ function buildTFButtons(candles) {
   baseTF = detectBaseTF(candles);
   activeTF = baseTF;
   baseFlatTimes = null;
+  _indicatorCache.clear(); // Invalidate indicators when resampling data
   const grp = document.getElementById("tf-group");
   grp.innerHTML = "";
 
@@ -2044,6 +2071,7 @@ function buildTFButtons(candles) {
 function switchTF(tfSec, tfType, btn) {
   activeTF = tfSec;
   activeTFType = tfType;
+  _indicatorCache.clear(); // Invalidate indicators when timeframe changes
 
   document
     .querySelectorAll("#tf-group .tv-dropdown-item")
@@ -2166,6 +2194,7 @@ let drawings = [];
 let drawPts = [];
 let drawPreview = null;
 let selectedDrawing = null;
+let _clipboard = null; // Clipboard for copy/paste drawings
 let drawCanvas, drawCtx;
 const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 const DRAW_COLORS = {
@@ -2634,6 +2663,33 @@ window._ctxColorDrawing = function (color) {
   }
 };
 
+function copyDrawing(d) {
+  if (!d) return;
+  _clipboard = JSON.parse(JSON.stringify(d)); // Deep copy
+  showToast("Dessin copié", "success", 1500);
+}
+
+function pasteDrawing() {
+  if (!_clipboard) {
+    showToast("Rien à coller", "warning");
+    return;
+  }
+  // Clone the drawing with new ID and offset time slightly (±50 candles for visibility)
+  const offset = (Math.random() - 0.5) * 100 * (activeTF || 60);
+  const pasted = JSON.parse(JSON.stringify(_clipboard));
+  pasted.id = _nextDrawId();
+  pasted.pts = pasted.pts.map((p) => ({
+    time: Math.max(0, p.time + offset),
+    price: p.price,
+  }));
+
+  _pushUndo();
+  drawings.push(pasted);
+  saveDrawings();
+  drawRedraw();
+  showToast("Dessin collé", "success", 1500);
+}
+
 // Canvas mousedown: drawing tool OR edit mode handle drag
 function onDrawMouseDown(e) {
   const rect = drawCanvas.getBoundingClientRect();
@@ -2931,8 +2987,11 @@ function clearAllDrawings() {
   saveDrawings();
 }
 
+let _drawDirty = true; // Track if canvas needs redraw
 function drawRedraw() {
-  if (!drawCtx) return;
+  if (!drawCtx || !_drawDirty) return;
+  _drawDirty = false; // Clear dirty flag after redraw
+
   const W = drawCanvas.width / (window.devicePixelRatio || 1);
   const H = drawCanvas.height / (window.devicePixelRatio || 1);
   drawCtx.clearRect(0, 0, W, H);
@@ -2949,6 +3008,36 @@ function drawRedraw() {
       true,
     );
   }
+}
+function markDrawDirty() { _drawDirty = true; }
+
+function drawAngleDistance(p0, p1, color) {
+  // Display angle and distance info for two-point drawings (preview or editing mode)
+  if (!p0 || !p1 || p0.x === null || p1.x === null) return;
+
+  const dx = p1.x - p0.x;
+  const dy = p1.y - p0.y;
+  const dist = Math.hypot(dx, dy);
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+
+  const midX = (p0.x + p1.x) / 2;
+  const midY = (p0.y + p1.y) / 2;
+
+  drawCtx.save();
+  drawCtx.font = "10px JetBrains Mono";
+  drawCtx.fillStyle = color;
+  drawCtx.globalAlpha = 0.8;
+
+  const text = `${dist.toFixed(0)}px · ${angle.toFixed(1)}°`;
+  const metrics = drawCtx.measureText(text);
+  const labelW = metrics.width + 6;
+
+  drawCtx.fillRect(midX - labelW / 2, midY - 12, labelW, 14);
+  drawCtx.globalAlpha = 1;
+  drawCtx.fillStyle = "#1a1f2e";
+  drawCtx.fillText(text, midX - labelW / 2 + 3, midY - 2);
+
+  drawCtx.restore();
 }
 
 function drawShape(d, selected, W, H, preview) {
@@ -2999,6 +3088,7 @@ function drawShape(d, selected, W, H, preview) {
       drawDot(p0.x, p0.y, baseColor);
       drawDot(p1.x, p1.y, baseColor);
     }
+    if (preview) drawAngleDistance(p0, p1, baseColor);
   } else if (d.type === "ray") {
     if (!validCoord(p0) || !validCoord(p1)) {
       drawCtx.restore();
@@ -3013,6 +3103,7 @@ function drawShape(d, selected, W, H, preview) {
     drawCtx.lineTo(p0.x + (dx / mag) * len, p0.y + (dy / mag) * len);
     drawCtx.stroke();
     if (!isEditing) drawDot(p0.x, p0.y, baseColor);
+    if (preview) drawAngleDistance(p0, p1, baseColor);
   } else if (d.type === "rect") {
     if (!validCoord(p0) || !validCoord(p1)) {
       drawCtx.restore();
@@ -3023,6 +3114,7 @@ function drawShape(d, selected, W, H, preview) {
     drawCtx.rect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y);
     drawCtx.fill();
     drawCtx.stroke();
+    if (preview) drawAngleDistance(p0, p1, baseColor);
   } else if (d.type === "fib") {
     if (!validCoord(p0) || !validCoord(p1)) {
       drawCtx.restore();
@@ -4156,6 +4248,18 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "z"))) {
     e.preventDefault();
     redo();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+    if (selectedDrawing && document.activeElement.tagName !== "INPUT") {
+      e.preventDefault();
+      copyDrawing(selectedDrawing);
+    }
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+    if (document.activeElement.tagName !== "INPUT") {
+      e.preventDefault();
+      pasteDrawing();
+    }
   }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (document.activeElement.tagName !== "INPUT") {
