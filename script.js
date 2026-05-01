@@ -2818,14 +2818,12 @@ function onDrawMouseDown(e) {
         startMy: my,
         origPts,
         origRefPriceY: origRefY,
-        // For single-handle drags, also snapshot the handle's screen coord
-        // so we can convert pixel-delta to time/price correctly per-point
-        origHandlePts: h
-          ? origPts.map((p) => {
-            const c = toXY(p.time, p.price);
-            return { sx: c.x, sy: c.y };
-          })
-          : null,
+        // Snapshot pixel coords of every point at drag start — used both for
+        // time/price conversion and for direct _x/_y rendering during drag
+        origHandlePts: origPts.map((p) => {
+          const c = toXY(p.time, p.price);
+          return { sx: c.x ?? 0, sy: c.y ?? 0 };
+        }),
       };
       editDragging = true;
       drawCanvas.style.cursor = h ? "grabbing" : "move";
@@ -2894,6 +2892,7 @@ function onDrawMouseMove(e) {
 
     if (h.ptIdx === "all") {
       // ── MOVE ALL: apply same delta to every point ──
+      // ── MOVE ALL ──
       const dt = pxToTimeDelta(dPx);
       let dp = 0;
       if (h.origRefPriceY !== null) {
@@ -2901,51 +2900,66 @@ function onDrawMouseMove(e) {
         if (newP !== null) dp = newP - h.origPts[0].price;
       }
       h.origPts.forEach((op, i) => {
-        editingDrawing.pts[i].time = Math.round(op.time + dt);
+        editingDrawing.pts[i].time  = Math.round(op.time + dt);
         editingDrawing.pts[i].price = op.price + dp;
+        // Direct pixel coords: each point shifts by the same (dPx, dPy)
+        editingDrawing.pts[i]._x = h.origHandlePts[i].sx + dPx;
+        editingDrawing.pts[i]._y = h.origHandlePts[i].sy + dPy;
       });
     } else {
-      // ── SINGLE HANDLE: update only the axes this handle controls ──
-      // First, reset ALL pts to original (frozen snapshot)
+      // ── SINGLE HANDLE: reset ALL pts to frozen snapshot, then apply delta ──
       h.origPts.forEach((op, i) => {
-        editingDrawing.pts[i].time = op.time;
+        editingDrawing.pts[i].time  = op.time;
         editingDrawing.pts[i].price = op.price;
+        // Clear pixel overrides — will be re-set for the affected pt below
+        delete editingDrawing.pts[i]._x;
+        delete editingDrawing.pts[i]._y;
       });
 
-      // Then apply the delta ONLY to the affected point+axis
       const dt = pxToTimeDelta(dPx);
 
-      // For price: use origRefPriceY of the affected point
       const priceForPt = (ptIdx) => {
-        if (!h.origHandlePts) return null;
         const refY = h.origHandlePts[ptIdx].sy;
         return pxToPriceAt(refY, dPy);
       };
 
+      // Helper: set _x/_y on a pt based on which axes move
+      const setPixel = (ptIdx, moveX, moveY) => {
+        editingDrawing.pts[ptIdx]._x = h.origHandlePts[ptIdx].sx + (moveX ? dPx : 0);
+        editingDrawing.pts[ptIdx]._y = h.origHandlePts[ptIdx].sy + (moveY ? dPy : 0);
+      };
+
       const pid = h.ptIdx;
-      const ax = h.axis;
+      const ax  = h.axis;
 
       if (pid === "tr") {
-        // top-right: pts[1].time (x), pts[0].price (y)
         editingDrawing.pts[1].time = Math.round(h.origPts[1].time + dt);
         const p = priceForPt(0);
         if (p !== null) editingDrawing.pts[0].price = p;
+        setPixel(1, true, false);
+        setPixel(0, false, true);
       } else if (pid === "bl") {
         editingDrawing.pts[0].time = Math.round(h.origPts[0].time + dt);
         const p = priceForPt(1);
         if (p !== null) editingDrawing.pts[1].price = p;
+        setPixel(0, true, false);
+        setPixel(1, false, true);
       } else if (pid === "mt") {
         const p = priceForPt(0);
         if (p !== null) editingDrawing.pts[0].price = p;
+        setPixel(0, false, true);
       } else if (pid === "mb") {
         const p = priceForPt(1);
         if (p !== null) editingDrawing.pts[1].price = p;
+        setPixel(1, false, true);
       } else if (pid === "ml") {
         editingDrawing.pts[0].time = Math.round(h.origPts[0].time + dt);
+        setPixel(0, true, false);
       } else if (pid === "mr") {
         editingDrawing.pts[1].time = Math.round(h.origPts[1].time + dt);
+        setPixel(1, true, false);
       } else if (typeof pid === "number") {
-        // Standard point handle (trendline, ray, fib, text...)
+        // Standard point handle (trendline, ray, fib, text…)
         if (ax === "y" || ax === "xy") {
           const p = priceForPt(pid);
           if (p !== null) editingDrawing.pts[pid].price = p;
@@ -2953,6 +2967,7 @@ function onDrawMouseMove(e) {
         if (ax === "x" || ax === "xy") {
           editingDrawing.pts[pid].time = Math.round(h.origPts[pid].time + dt);
         }
+        setPixel(pid, ax === "x" || ax === "xy", ax === "y" || ax === "xy");
       }
     }
 
@@ -2994,10 +3009,14 @@ function onDrawMouseUp(_e) {
     // Normalize rect corners ONLY when drag finishes (not mid-drag)
     if (editingDrawing && editingDrawing.type === "rect")
       normalizeRect(editingDrawing);
+    // Remove temporary pixel overrides — pts revert to time/price rendering
+    if (editingDrawing)
+      editingDrawing.pts.forEach(p => { delete p._x; delete p._y; });
     editDragging = false;
     editHandle = null;
     drawCanvas.style.cursor = editingDrawing ? "default" : "";
     saveDrawings();
+    drawRedraw();
   }
 }
 
@@ -3158,13 +3177,13 @@ function drawShape(d, selected, W, H, preview) {
   drawCtx.lineWidth = preview ? 1.5 : isEditing ? 2 : selected ? 2.5 : 1.5;
   drawCtx.setLineDash(preview ? [6, 4] : []);
 
-  const p0 = d.pts[0] ? toXY(d.pts[0].time, d.pts[0].price) : null;
-  // Use raw pixel coords when available (preview mode) to avoid snap-induced offset
-  const p1 = d.pts[1]
-    ? (d.pts[1]._x !== undefined
-        ? { x: d.pts[1]._x, y: d.pts[1]._y }
-        : toXY(d.pts[1].time, d.pts[1].price))
-    : null;
+  // Use raw pixel coords (_x/_y) when set — avoids coordinateToTime/timeToCoordinate
+  // snap-to-bar-centre that causes handles to lag or jump during drag/preview.
+  const _pt2xy = (pt) => pt._x !== undefined
+    ? { x: pt._x, y: pt._y }
+    : toXY(pt.time, pt.price);
+  const p0 = d.pts[0] ? _pt2xy(d.pts[0]) : null;
+  const p1 = d.pts[1] ? _pt2xy(d.pts[1]) : null;
 
   if (d.type === "hline") {
     const yy = mainSeries ? mainSeries.priceToCoordinate(d.pts[0].price) : null;
