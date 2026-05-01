@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="style.css?v=8" />
 </head>
 
 <body>
@@ -22,17 +22,25 @@
       <!-- Logo -->
       <div class="logo">
         <svg class="logo-mark" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect width="26" height="26" rx="7" fill="url(#logo-g)"/>
+          <rect width="26" height="26" rx="7" fill="url(#logo-g2)"/>
           <polyline points="5 19 10 12 15 15.5 21 7" stroke="white" stroke-width="2.2"
             stroke-linecap="round" stroke-linejoin="round"/>
           <defs>
-            <linearGradient id="logo-g" x1="0" y1="0" x2="26" y2="26" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#2563EB"/>
+            <linearGradient id="logo-g2" x1="0" y1="0" x2="26" y2="26" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#1D4ED8"/>
+              <stop offset="0.5" stop-color="#4F46E5"/>
               <stop offset="1" stop-color="#7C3AED"/>
             </linearGradient>
           </defs>
         </svg>
         <span class="logo-text">Trade<strong>View Pro</strong></span>
+      </div>
+
+      <!-- Live price ticker -->
+      <div id="topbar-ticker">
+        <span id="ticker-symbol" class="ticker-symbol">—</span>
+        <span id="ticker-price" class="ticker-price">—</span>
+        <span id="ticker-change" class="ticker-change">—</span>
       </div>
 
       <!-- Icon tools -->

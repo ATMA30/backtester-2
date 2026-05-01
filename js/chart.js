@@ -9,9 +9,9 @@ function initChart() {
   chart = LightweightCharts.createChart(container, {
     layout: {
       background: { color: "#060810" },
-      textColor: "#64738A",
+      textColor: "#4A5568",
       fontFamily: "'JetBrains Mono', monospace",
-      fontSize: 11,
+      fontSize: 10,
     },
     localization: {
       locale: "fr-FR",
@@ -24,22 +24,34 @@ function initChart() {
       },
     },
     grid: {
-      vertLines: { color: "rgba(255,255,255,0.032)", visible: true },
-      horzLines: { color: "rgba(255,255,255,0.032)", visible: true },
+      // Lignes horizontales (prix) plus visibles — repères de lecture
+      horzLines: { color: "rgba(255,255,255,0.038)", style: 0, visible: true },
+      // Lignes verticales (temps) très subtiles
+      vertLines: { color: "rgba(255,255,255,0.018)", style: 0, visible: true },
     },
     crosshair: {
       mode: LightweightCharts.CrosshairMode.Normal,
-      vertLine: { color: "#3B82F6", width: 1, style: 1, labelBackgroundColor: "#3B82F6" },
-      horzLine: { color: "#3B82F6", width: 1, style: 1, labelBackgroundColor: "#3B82F6" },
+      vertLine: {
+        color: "rgba(148,163,184,0.5)", width: 1, style: 3,
+        labelBackgroundColor: "#1E293B",
+      },
+      horzLine: {
+        color: "rgba(148,163,184,0.5)", width: 1, style: 3,
+        labelBackgroundColor: "#1E293B",
+      },
     },
     rightPriceScale: {
-      borderColor: "rgba(255,255,255,0.052)",
+      borderColor: "rgba(255,255,255,0.045)",
       scaleMargins: { top: 0.1, bottom: 0.25 },
+      textColor: "#4A5568",
     },
     timeScale: {
-      borderColor: "rgba(255,255,255,0.052)",
+      borderColor: "rgba(255,255,255,0.045)",
       timeVisible: true,
       secondsVisible: false,
+      textColor: "#4A5568",
+      fixLeftEdge: false,
+      fixRightEdge: false,
     },
     handleScroll: { mouseWheel: true, pressedMouseMove: true },
     handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
@@ -90,25 +102,48 @@ function createMainSeries() {
   }
   if (currentType === "Candlestick") {
     mainSeries = chart.addCandlestickSeries({
-      upColor: "#00C46E", downColor: "#F2364A",
-      borderUpColor: "#00C46E", borderDownColor: "#F2364A",
-      wickUpColor: "#00C46E", wickDownColor: "#F2364A",
+      // Corps semi-transparents → les bougies se lisent en profondeur
+      upColor:          "rgba(0,210,106,0.82)",
+      downColor:        "rgba(255,59,92,0.82)",
+      // Bordures lumineuses → contour net même sur petites bougies
+      borderUpColor:   "#00D26A",
+      borderDownColor: "#FF3B5C",
+      // Mèches légèrement plus sombres que le corps → hiérarchie visuelle
+      wickUpColor:     "#00A855",
+      wickDownColor:   "#CC2E48",
+      wickVisible: true,
+      borderVisible: true,
+      priceLineColor:    "#3B82F6",
+      priceLineWidth:    1,
+      priceLineStyle:    2,
+      lastValueVisible:  true,
     });
   } else if (currentType === "Bar") {
     mainSeries = chart.addBarSeries({
-      upColor: "#00C46E", downColor: "#F2364A",
+      upColor: "#00D26A", downColor: "#FF3B5C",
+      thinBars: false,
     });
   } else if (currentType === "Line") {
     mainSeries = chart.addLineSeries({
-      color: "#3B82F6", lineWidth: 2,
-      crosshairMarkerVisible: true, crosshairMarkerRadius: 4,
+      color: "#3B82F6",
+      lineWidth: 2,
+      lineStyle: 0,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 5,
+      crosshairMarkerBorderColor: "#3B82F6",
+      crosshairMarkerBackgroundColor: "#060810",
+      lastValueVisible: true,
+      priceLineVisible: true,
+      priceLineColor: "#3B82F6",
     });
   } else if (currentType === "Area") {
     mainSeries = chart.addAreaSeries({
       lineColor: "#3B82F6",
-      topColor: "rgba(59,130,246,0.22)",
-      bottomColor: "rgba(59,130,246,0.01)",
+      topColor: "rgba(59,130,246,0.28)",
+      bottomColor: "rgba(59,130,246,0.0)",
       lineWidth: 2,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 5,
     });
   }
 }
@@ -231,6 +266,9 @@ function handleCrosshair(param) {
   _ttChg.textContent = chgStr;
   _ttChg.className = "tt-val tt-chg tt-change " + (chg >= 0 ? "up" : "down");
 
+  // Live price ticker in topbar
+  _updateTopbarTicker(C, chg);
+
   tooltip.style.display = "block";
   const rect = chartContainer.getBoundingClientRect();
   let x = param.point.x + 12;
@@ -261,12 +299,13 @@ function renderChart(candles) {
   }
 
   const volData = new Array(n);
-  const upColor = "rgba(0,196,110,0.50)", downColor = "rgba(242,54,74,0.50)";
+  // Volume: bull légèrement plus opaque que bear — accent visuel sur les hausses
+  const volBull = "rgba(0,210,106,0.45)", volBear = "rgba(255,59,92,0.35)";
   for (let i = 0; i < n; i++) {
     volData[i] = {
       time: candles[i].time,
       value: candles[i].volume || 0,
-      color: candles[i].close >= candles[i].open ? upColor : downColor,
+      color: candles[i].close >= candles[i].open ? volBull : volBear,
     };
   }
   volumeSeries.setData(volData);
@@ -291,11 +330,43 @@ function renderChart(candles) {
   dom.welcomeOverlay.style.opacity = "0";
   setTimeout(() => (dom.welcomeOverlay.style.display = "none"), 400);
 
+  // Update topbar ticker symbol and last price
+  const lastC = candles[n - 1];
+  const symEl = document.getElementById("ticker-symbol");
+  if (symEl) symEl.textContent = currentSymbol;
+  const lastChg = lastC.open > 0 ? ((lastC.close - lastC.open) / lastC.open) * 100 : 0;
+  _updateTopbarTicker(lastC.close, lastChg);
+
   renderIndicators(candles);
   loadDrawings();
   drawRedraw();
   savePrefs();
   showToast(`${currentSymbol} — ${n.toLocaleString("fr-FR")} bougies chargées`, "success", 3000);
+}
+
+// ── TOPBAR LIVE TICKER ─────────────────────────────────────
+let _lastTickerPrice = null;
+function _updateTopbarTicker(price, chgPct) {
+  const priceEl = document.getElementById("ticker-price");
+  const chgEl   = document.getElementById("ticker-change");
+  if (!priceEl) return;
+
+  const prev = _lastTickerPrice;
+  _lastTickerPrice = price;
+
+  priceEl.textContent = fmt(price);
+  priceEl.classList.remove("tick-bull", "tick-bear");
+
+  if (prev !== null && price !== prev) {
+    void priceEl.offsetWidth; // force reflow to restart animation
+    priceEl.classList.add(price > prev ? "tick-bull" : "tick-bear");
+  }
+
+  if (chgEl) {
+    const sign = chgPct >= 0 ? "+" : "";
+    chgEl.textContent = `${sign}${chgPct.toFixed(2)}%`;
+    chgEl.className = "ticker-change " + (chgPct >= 0 ? "positive" : "negative");
+  }
 }
 
 function dateFromTime(t) {
