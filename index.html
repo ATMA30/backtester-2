@@ -613,8 +613,10 @@
   <div id="trade-history-panel">
     <div class="th-header">
       <div class="th-title">Journal de trades</div>
-      <button class="th-export" onclick="exportTradeHistory()" title="Exporter CSV">📥</button>
-      <button class="th-close" onclick="toggleTradeHistory()">✕</button>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <button class="th-export" onclick="exportTradeHistory()" title="Exporter CSV">📥</button>
+        <button class="th-close" onclick="toggleTradeHistory()">✕</button>
+      </div>
     </div>
     <div class="th-stats">
       <div class="th-stat">

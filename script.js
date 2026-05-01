@@ -266,8 +266,8 @@ function drawEquityCurve(history) {
 
   if (!history.length) return;
 
-  const width = svg.clientWidth || 300;
-  const height = svg.clientHeight || 60;
+  const width = svg.getBoundingClientRect().width || svg.clientWidth || 284;
+  const height = svg.getBoundingClientRect().height || svg.clientHeight || 60;
   const padding = 4;
   const graphW = width - 2 * padding;
   const graphH = height - 2 * padding;
@@ -1850,13 +1850,12 @@ function exportTradeHistory() {
     showToast("Aucun trade à exporter", "warning");
     return;
   }
-  const header = "Type,Entry,Exit,Qty,P&L,R:R,Duration,Reason\n";
+  const header = "Type,Entry,Exit,Qty,P&L,R:R,Reason\n";
   const rows = tradeSim.history.map(t => {
-    const riskDiff = Math.abs(t.entry - (t.sl || t.entry));
-    const rewardDiff = Math.abs(t.tp - t.entry);
+    const riskDiff = t.sl ? Math.abs(t.entry - t.sl) : 0;
+    const rewardDiff = t.tp ? Math.abs(t.tp - t.entry) : 0;
     const rr = riskDiff > 0 ? (rewardDiff / riskDiff).toFixed(2) : "—";
-    const duration = t.closeTime && t.openTime ? Math.round((t.closeTime - t.openTime) / 60) : "—";
-    const csv = `${t.type},"${t.entry.toFixed(6)}","${t.exit.toFixed(6)}","${t.qty.toFixed(4)}","${t.pnl.toFixed(2)}","${rr}","${duration}","${(t.reason || "").replace(/"/g, '""')}"`;
+    const csv = `${t.type},"${(+t.entry).toFixed(6)}","${(+t.exit).toFixed(6)}","${(+(t.qty||1)).toFixed(4)}","${(+t.pnl).toFixed(2)}","${rr}","${(t.reason || "").replace(/"/g, '""')}"`;
     return csv;
   }).join("\n");
 
@@ -3091,11 +3090,8 @@ function clearAllDrawings() {
   saveDrawings();
 }
 
-let _drawDirty = true; // Track if canvas needs redraw
 function drawRedraw() {
-  if (!drawCtx || !_drawDirty) return;
-  _drawDirty = false; // Clear dirty flag after redraw
-
+  if (!drawCtx) return;
   const W = drawCanvas.width / (window.devicePixelRatio || 1);
   const H = drawCanvas.height / (window.devicePixelRatio || 1);
   drawCtx.clearRect(0, 0, W, H);
@@ -3113,7 +3109,6 @@ function drawRedraw() {
     );
   }
 }
-function markDrawDirty() { _drawDirty = true; }
 
 function drawAngleDistance(p0, p1, color) {
   // Display angle and distance info for two-point drawings (preview or editing mode)
