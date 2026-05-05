@@ -3,6 +3,30 @@
 //  Depends on: config.js, ui.js, chart.js, timeframe.js, trading.js
 // ========================================================
 
+function startReplayRandom() {
+  if (!baseCandles || baseCandles.length < 20) {
+    showToast("Pas assez de données pour un replay aléatoire.", "warning");
+    return;
+  }
+  if (replay.active) exitReplay();
+
+  // Leave at least 30% of candles to play — randomise inside the first 70%
+  // but always after the first 10% so there's some visible context.
+  const n = baseCandles.length;
+  const minIdx = Math.max(1, Math.floor(n * 0.10));
+  const maxIdx = Math.floor(n * 0.70);
+  const idx = minIdx + Math.floor(Math.random() * (maxIdx - minIdx + 1));
+
+  closeModal();
+  document.getElementById("btn-replay").classList.add("active");
+  document.getElementById("replay-hint").style.display = "none";
+  beginReplay(idx);
+
+  const d = new Date(baseCandles[idx].time * 1000);
+  const label = d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
+  showToast(`Replay aléatoire — départ ${label}`, "info", 3000);
+}
+
 function startReplayMode() {
   if (!baseCandles || baseCandles.length < 2) {
     showToast("Importez des données avant de lancer le replay.", "warning");
