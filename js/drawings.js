@@ -567,8 +567,9 @@ function onDrawMouseMove(e) {
     const dPy = my - h.startMy;
 
     const pixelToTime = (origSx, dpx) => {
-      const newX = origSx + dpx;
-      return chart.timeScale().coordinateToTime(newX) ?? null;
+      // fromXY extrapolates beyond the last candle via _visibleBarPair;
+      // coordinateToTime() returns null past the data edge causing the handle to snap back.
+      return fromXY(origSx + dpx, 0).time ?? null;
     };
     const pixelToPrice = (origSy, dpy) => {
       if (!mainSeries) return null;
