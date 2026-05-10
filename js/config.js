@@ -49,7 +49,8 @@ const replay = {
 // UI state
 let _tradeHistoryOpen = false;
 let _dom = null;
-let _shiftHeld = false;
+let _shiftHeld = false; // angle constraint (multiples of 45°)
+let _ctrlHeld  = false; // OHLC snap (was Shift)
 let _undoStack = [], _redoStack = [];
 const MAX_UNDO = 50;
 
@@ -82,6 +83,19 @@ const TF_DEFS = [
   { label: "3M",  s: 7776000,  tfType: "quarter"  },
   { label: "1Y",  s: 31536000, tfType: "year"     },
 ];
+
+// Forex sessions — UTC open/close hours, zone fill + opening line colors
+// Session hours are UTC. If your broker data is NOT in UTC (e.g. GMT+2 server time),
+// adjust this offset so zones line up with what you see on the chart.
+// Default = 0 (UTC) — correct for data downloaded from the internet.
+let _forexTzOffset = 0;
+
+const FOREX_SESSIONS = {
+  sydney:  { enabled: false, label: "Sydney",   start: 22, end:  7, zone: "rgba(139,92,246,0.032)",  line: "#A78BFA" },
+  tokyo:   { enabled: false, label: "Tokyo",    start:  0, end:  9, zone: "rgba(251,146,60,0.032)",  line: "#FB923C" },
+  london:  { enabled: false, label: "Londres",  start:  8, end: 17, zone: "rgba(59,130,246,0.038)",  line: "#60A5FA" },
+  newyork: { enabled: false, label: "New York", start: 13, end: 22, zone: "rgba(0,210,106,0.035)",   line: "#34D399" },
+};
 
 const _SEP_COLORS = {
   "1D": { line: "rgba(91, 142, 255, 0.30)",  label: "rgba(91, 142, 255, 0.65)"  },

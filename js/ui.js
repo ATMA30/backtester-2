@@ -325,18 +325,27 @@ function updateRRBadge() {
   badge.classList.toggle("bad", parseFloat(rr) < 1.0);
 }
 
-// ── SNAP OHLC ─────────────────────────────────────────────
+// ── DRAW MODIFIER KEYS ────────────────────────────────────
+// Shift → constrain angle to 0°/45°/90°/135°/180° (TradingView behaviour)
+// Ctrl  → snap cursor to nearest OHLC price level
 document.addEventListener("keydown", e => {
-  if (e.key === "Shift" && drawTool !== "cursor") {
+  if (drawTool === "cursor") return;
+  if (e.key === "Shift") {
     _shiftHeld = true;
+    document.getElementById("snap-badge").textContent = "⊿ Angle contraint";
+    document.getElementById("snap-badge").classList.add("visible");
+  }
+  if (e.key === "Control" || e.key === "Meta") {
+    _ctrlHeld = true;
+    document.getElementById("snap-badge").textContent = "⬡ Snap OHLC actif";
     document.getElementById("snap-badge").classList.add("visible");
   }
 });
 document.addEventListener("keyup", e => {
-  if (e.key === "Shift") {
-    _shiftHeld = false;
+  if (e.key === "Shift")                  _shiftHeld = false;
+  if (e.key === "Control" || e.key === "Meta") _ctrlHeld = false;
+  if (!_shiftHeld && !_ctrlHeld)
     document.getElementById("snap-badge").classList.remove("visible");
-  }
 });
 
 function _snapToOHLC(time, price) {

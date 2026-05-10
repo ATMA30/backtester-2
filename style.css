@@ -1726,6 +1726,62 @@ body.replay-active #tv-chart {
 .sep-color-year    { color: var(--bear); }
 
 /* ══════════════════════════════════════════════════════════════════
+   FOREX SESSIONS DROPDOWN
+══════════════════════════════════════════════════════════════════ */
+.forex-menu { min-width: 210px; padding: 6px 4px; }
+
+.forex-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  transition: background 0.1s;
+  user-select: none;
+}
+.forex-session-row:hover { background: var(--bg-overlay); }
+
+.forex-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.forex-name { flex: 1; font-weight: 500; }
+
+.forex-hours {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.forex-session-row input[type="checkbox"] {
+  width: 13px; height: 13px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.forex-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+
+.forex-note {
+  padding: 4px 10px 2px;
+  font-size: 9.5px;
+  color: var(--text-muted);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
    DATA TABLE
 ══════════════════════════════════════════════════════════════════ */
 #data-table { width: 100%; border-collapse: collapse; }

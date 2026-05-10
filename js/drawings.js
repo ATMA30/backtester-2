@@ -197,6 +197,36 @@ function getHandles(d) {
       handles.push({ ptIdx: "ml", axis: "x0", x: p0.x, y: cmy  });
       handles.push({ ptIdx: "mr", axis: "x1", x: p1.x, y: cmy  });
     }
+  } else if (d.type === "channel" && d.pts.length >= 2) {
+    const cp0 = ptXY(d.pts[0]);
+    const cp1 = ptXY(d.pts[1]);
+    if (cp0.x === null || cp1.x === null) return handles;
+
+    handles.push({ ptIdx: 0, axis: "xy", x: cp0.x, y: cp0.y });
+    handles.push({ ptIdx: 1, axis: "xy", x: cp1.x, y: cp1.y });
+
+    if (d.pts.length >= 3) {
+      const cp2 = ptXY(d.pts[2]);
+      if (cp2.x !== null) {
+        const dx = cp1.x - cp0.x, dy = cp1.y - cp0.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len;
+        const dist = (cp2.x - cp0.x) * nx + (cp2.y - cp0.y) * ny;
+
+        // C3 = P0 + width·normal — handle for adjusting perpendicular width
+        const c3x = cp0.x + dist * nx, c3y = cp0.y + dist * ny;
+        handles.push({ ptIdx: "w", axis: "w", x: c3x, y: c3y });
+
+        // Rotation handle — 28px outside the midpoint of the bottom edge
+        const sign = dist >= 0 ? -1 : 1;
+        const midX = (cp0.x + cp1.x) / 2, midY = (cp0.y + cp1.y) / 2;
+        handles.push({
+          ptIdx: "rot", axis: "rot",
+          x: midX + sign * nx * 28,
+          y: midY + sign * ny * 28,
+        });
+      }
+    }
   } else {
     d.pts.forEach((pt, i) => {
       const p = ptXY(pt);
@@ -210,8 +240,9 @@ function getHandles(d) {
 function findHandle(mx, my, d) {
   let best = null, bestDist = HANDLE_R * 3;
   for (const h of getHandles(d)) {
+    const threshold = h.ptIdx === "rot" ? HANDLE_R * 5 : HANDLE_R * 3;
     const dist = Math.hypot(mx - h.x, my - h.y);
-    if (dist < bestDist) { bestDist = dist; best = h; }
+    if (dist < threshold && dist < bestDist) { bestDist = dist; best = h; }
   }
   return best;
 }
@@ -264,8 +295,16 @@ function setDrawTool(tool) {
   drawRedraw();
 }
 
-function needsTwo(t) {
-  return ["trendline", "ray", "rect", "fib"].includes(t);
+function needsTwo(t)   { return ["trendline","ray","rect","fib"].includes(t); }
+function needsThree(t) { return t === "channel"; }
+
+// Snap pixel position to nearest 45° angle from anchor (p0x,p0y)
+function _constrainAngle45(p0x, p0y, px, py) {
+  const dx = px - p0x, dy = py - p0y;
+  const angle   = Math.atan2(dy, dx);
+  const snapped = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+  const dist    = Math.hypot(dx, dy);
+  return { x: p0x + dist * Math.cos(snapped), y: p0y + dist * Math.sin(snapped) };
 }
 
 // ── MOUSE EVENTS ──────────────────────────────────────────
@@ -382,6 +421,15 @@ function onDrawMouseDown(e) {
     const h = findHandle(mx, my, editingDrawing);
     if (h || isNearDrawing(editingDrawing, mx, my)) {
       const origPts = editingDrawing.pts.map((p) => ({ ...p }));
+      // Pre-compute channel center for rotation handle
+      let origCenter = null;
+      if (editingDrawing.type === "channel" && origPts.length >= 2) {
+        const cp0 = toXY(origPts[0].time, origPts[0].price);
+        const cp1 = toXY(origPts[1].time, origPts[1].price);
+        if (cp0.x !== null && cp1.x !== null)
+          origCenter = { x: (cp0.x + cp1.x) / 2, y: (cp0.y + cp1.y) / 2 };
+      }
+
       editHandle = {
         ptIdx: h ? h.ptIdx : "all",
         axis: h ? h.axis : "xy",
@@ -391,6 +439,7 @@ function onDrawMouseDown(e) {
           const c = toXY(p.time, p.price);
           return { sx: c.x ?? 0, sy: c.y ?? 0 };
         }),
+        origCenter, // used for channel rotation
       };
       editDragging = true;
       drawCanvas.style.cursor = h ? "grabbing" : "move";
@@ -400,35 +449,117 @@ function onDrawMouseDown(e) {
     return;
   }
 
-  const pt = fromXY(mx, my);
+  let pt = fromXY(mx, my);
   if (!pt.time) return;
   if (drawTool === "text") { showTextInput(mx, my, pt); return; }
 
+  // Ctrl = snap to nearest OHLC
+  const _applySnap = (p) => {
+    if (_ctrlHeld) { const s = _snapToOHLC(p.time, p.price); p.time = s.time; p.price = s.price; }
+    return p;
+  };
+  // Shift = constrain to 45° multiples from first point
+  const _applyAngle = (p, pxMouse, pyMouse) => {
+    if (_shiftHeld && drawPts.length >= 1) {
+      const p0 = drawPts[0];
+      const pp0 = toXY(p0.time, p0.price);
+      if (pp0.x !== null) {
+        const c = _constrainAngle45(pp0.x, pp0.y, pxMouse, pyMouse);
+        const r = fromXY(c.x, c.y);
+        if (r.time) { p.time = r.time; p.price = r.price; }
+      }
+    }
+    return p;
+  };
+
   if (needsTwo(drawTool)) {
     if (drawPts.length === 0) {
-      if (_shiftHeld) { const s = _snapToOHLC(pt.time, pt.price); pt.time = s.time; pt.price = s.price; }
-      drawPts.push(pt);
+      drawPts.push(_applySnap(pt));
     } else {
-      if (_shiftHeld) { const s = _snapToOHLC(pt.time, pt.price); pt.time = s.time; pt.price = s.price; }
+      pt = _applySnap(_applyAngle(pt, mx, my));
       _pushUndo();
       drawings.push({ type: drawTool, pts: [drawPts[0], pt], id: _nextDrawId(), color: DRAW_COLORS.default });
       drawPts = []; drawPreview = null;
-      drawRedraw(); saveDrawings();
-      setDrawTool("cursor");
+      drawRedraw(); saveDrawings(); setDrawTool("cursor");
+    }
+  } else if (needsThree(drawTool)) {
+    if (drawPts.length === 0) {
+      drawPts.push(_applySnap(pt));
+    } else if (drawPts.length === 1) {
+      drawPts.push(_applySnap(_applyAngle(pt, mx, my)));
+    } else {
+      pt = _applySnap(pt);
+      _pushUndo();
+      drawings.push({ type: drawTool, pts: [drawPts[0], drawPts[1], pt], id: _nextDrawId(), color: DRAW_COLORS.default });
+      drawPts = []; drawPreview = null;
+      drawRedraw(); saveDrawings(); setDrawTool("cursor");
     }
   } else {
-    if (_shiftHeld) { const s = _snapToOHLC(pt.time, pt.price); pt.time = s.time; pt.price = s.price; }
-    _pushUndo();
-    drawings.push({ type: drawTool, pts: [pt], id: _nextDrawId(), color: DRAW_COLORS.default });
     drawPts = [];
-    drawRedraw(); saveDrawings();
-    setDrawTool("cursor");
+    _pushUndo();
+    drawings.push({ type: drawTool, pts: [_applySnap(pt)], id: _nextDrawId(), color: DRAW_COLORS.default });
+    drawRedraw(); saveDrawings(); setDrawTool("cursor");
   }
+}
+
+// ── CHANNEL DRAG (dedicated, bypasses the general reset-based system) ──────
+function _dragChannel(mx, my) {
+  const h   = editHandle;
+  const pid = h.ptIdx;
+  const pts = editingDrawing.pts;
+
+  // Write new pixel position AND time/price into a single pt
+  const _put = (i, nx, ny) => {
+    if (!pts[i]) return;
+    const r = fromXY(nx, ny);
+    if (r.time) { pts[i].time = r.time; pts[i].price = r.price; }
+    pts[i]._x = nx; pts[i]._y = ny;
+  };
+
+  if (pid === "all") {
+    const dx = mx - h.startMx, dy = my - h.startMy;
+    h.origHandlePts.forEach((op, i) => _put(i, op.sx + dx, op.sy + dy));
+
+  } else if (typeof pid === "number") {
+    // Corner — delta from mousedown position
+    const op = h.origHandlePts[pid];
+    _put(pid, op.sx + (mx - h.startMx), op.sy + (my - h.startMy));
+
+  } else if (pid === "w") {
+    // Width: project mouse directly onto the perpendicular of the original P0-P1
+    const b0 = h.origHandlePts[0], b1 = h.origHandlePts[1];
+    const ddx = b1.sx - b0.sx, ddy = b1.sy - b0.sy;
+    const ll  = Math.hypot(ddx, ddy) || 1;
+    const nnx = -ddy / ll, nny = ddx / ll;
+    const dist = (mx - b0.sx) * nnx + (my - b0.sy) * nny;
+    _put(2, b0.sx + dist * nnx, b0.sy + dist * nny);
+
+  } else if (pid === "rot" && h.origCenter) {
+    // Rotation: pivot all pts around the original rectangle center
+    const cen        = h.origCenter;
+    const origAngle  = Math.atan2(h.startMy - cen.y, h.startMx - cen.x);
+    const delta      = Math.atan2(my - cen.y, mx - cen.x) - origAngle;
+    const cos = Math.cos(delta), sin = Math.sin(delta);
+    h.origHandlePts.forEach((op, i) => {
+      _put(i,
+        cen.x + (op.sx - cen.x) * cos - (op.sy - cen.y) * sin,
+        cen.y + (op.sx - cen.x) * sin + (op.sy - cen.y) * cos,
+      );
+    });
+  }
+
+  drawRedraw();
 }
 
 function onDrawMouseMove(e) {
   const rect = drawCanvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+
+  // Channel has its own drag system — bypass the general reset-based flow
+  if (editingDrawing && editDragging && editHandle && editingDrawing.type === "channel") {
+    _dragChannel(mx, my);
+    return;
+  }
 
   if (editingDrawing && editDragging && editHandle) {
     const h = editHandle;
@@ -515,13 +646,30 @@ function onDrawMouseMove(e) {
 
   if (!drawPts.length) return;
   let preview = fromXY(mx, my);
-  if (_shiftHeld && preview.time) {
-    const snapped = _snapToOHLC(preview.time, preview.price);
-    preview = { time: snapped.time, price: snapped.price };
-  } else {
-    preview._x = mx;
-    preview._y = my;
+  let px = mx, py = my;
+
+  // Shift: constrain angle to 45° multiples from first anchor
+  if (_shiftHeld && drawPts.length >= 1) {
+    const p0  = drawPts[0];
+    const pp0 = toXY(p0.time, p0.price);
+    if (pp0.x !== null) {
+      const c = _constrainAngle45(pp0.x, pp0.y, mx, my);
+      px = c.x; py = c.y;
+      const r = fromXY(px, py);
+      if (r.time) { preview.time = r.time; preview.price = r.price; }
+    }
   }
+
+  // Ctrl: snap to nearest OHLC
+  if (_ctrlHeld && preview.time) {
+    const s = _snapToOHLC(preview.time, preview.price);
+    preview = { time: s.time, price: s.price };
+    // No _x/_y — let toXY render snapped position
+  } else {
+    preview._x = px;
+    preview._y = py;
+  }
+
   drawPreview = preview;
   drawRedraw();
 }
@@ -597,6 +745,31 @@ function isNearDrawing(d, mx, my) {
     if (p.x === null) return false;
     return Math.abs(mx - p.x) < 60 && Math.abs(my - p.y) < 16;
   }
+  if (d.type === "channel" && d.pts.length >= 2) {
+    const cp0 = toXY(d.pts[0].time, d.pts[0].price);
+    const cp1 = toXY(d.pts[1].time, d.pts[1].price);
+    if (cp0.x === null || cp1.x === null) return false;
+    // Near the main axis line
+    if (distToSeg(mx, my, cp0.x, cp0.y, cp1.x, cp1.y) < T) return true;
+    if (d.pts[2]) {
+      const cp2 = toXY(d.pts[2].time, d.pts[2].price);
+      if (cp2.x !== null) {
+        const dxM = cp1.x - cp0.x, dyM = cp1.y - cp0.y;
+        const lenM = Math.hypot(dxM, dyM) || 1;
+        const nxM = -dyM / lenM, nyM = dxM / lenM;
+        const dist = (cp2.x - cp0.x) * nxM + (cp2.y - cp0.y) * nyM;
+        // Near the parallel line or inside the channel
+        const c2 = { x: cp0.x + dist*nxM, y: cp0.y + dist*nyM };
+        const c3 = { x: cp1.x + dist*nxM, y: cp1.y + dist*nyM };
+        if (distToSeg(mx, my, c2.x, c2.y, c3.x, c3.y) < T) return true;
+        // Inside the parallelogram (cross-product sign test)
+        const side = (mx - cp0.x) * nxM + (my - cp0.y) * nyM;
+        return side >= 0 && side <= Math.abs(dist) &&
+               distToSeg(mx, my, cp0.x, cp0.y, cp1.x, cp1.y) < Math.abs(dist);
+      }
+    }
+    return false;
+  }
   return false;
 }
 
@@ -632,10 +805,16 @@ function drawRedraw() {
   const W = drawCanvas.width / (window.devicePixelRatio || 1);
   const H = drawCanvas.height / (window.devicePixelRatio || 1);
   drawCtx.clearRect(0, 0, W, H);
-  drawSeparators(W, H);
+  drawForexSessions(W, H);   // ① zones forex (fond, derrière tout)
+  drawSeparators(W, H);      // ② séparateurs de session
   drawings.forEach((d) => drawShape(d, d === selectedDrawing, W, H));
   if (drawPts.length && drawPreview) {
-    drawShape({ type: drawTool, pts: [drawPts[0], drawPreview] }, false, W, H, true);
+    if (needsThree(drawTool) && drawPts.length === 2) {
+      // 3rd point preview (channel width)
+      drawShape({ type: drawTool, pts: [drawPts[0], drawPts[1], drawPreview] }, false, W, H, true);
+    } else {
+      drawShape({ type: drawTool, pts: [drawPts[0], drawPreview] }, false, W, H, true);
+    }
   }
 }
 
@@ -733,6 +912,73 @@ function drawShape(d, selected, W, H, preview) {
     drawCtx.font = `${d.fontSize || 12}px JetBrains Mono, monospace`;
     drawCtx.fillStyle = baseColor;
     drawCtx.fillText(d.text, p0.x, p0.y);
+
+  } else if (d.type === "channel") {
+    if (!validCoord(p0) || !validCoord(p1)) { drawCtx.restore(); return; }
+
+    // The 3rd point defines the perpendicular width of the channel
+    const p2raw = d.pts[2] ? _pt2xy(d.pts[2]) : null;
+
+    const dx = p1.x - p0.x, dy = p1.y - p0.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len; // unit normal (perpendicular)
+
+    if (!validCoord(p2raw)) {
+      // Only 2 pts set (mid-drawing) — show the main line
+      drawCtx.beginPath();
+      drawCtx.moveTo(p0.x, p0.y);
+      drawCtx.lineTo(p1.x, p1.y);
+      drawCtx.stroke();
+      if (!isEditing) {
+        drawDot(p0.x, p0.y, baseColor);
+        drawDot(p1.x, p1.y, baseColor);
+      }
+    } else {
+      // Project p2 onto the normal to get signed channel width
+      const dist = (p2raw.x - p0.x) * nx + (p2raw.y - p0.y) * ny;
+
+      const c0 = { x: p0.x,            y: p0.y            };
+      const c1 = { x: p1.x,            y: p1.y            };
+      const c2 = { x: p1.x + dist*nx,  y: p1.y + dist*ny  };
+      const c3 = { x: p0.x + dist*nx,  y: p0.y + dist*ny  };
+
+      // During edit: ultra-transparent fill so candles stay readable
+      const fillAlpha = isEditing ? "0.03" : (preview ? "0.05" : "0.08");
+      drawCtx.fillStyle = d.fillColor ||
+        (baseColor === DRAW_COLORS.default
+          ? `rgba(59,130,246,${fillAlpha})`
+          : baseColor.replace(/[\d.]+\)$/, `${fillAlpha})`));
+
+      drawCtx.beginPath();
+      drawCtx.moveTo(c0.x, c0.y);
+      drawCtx.lineTo(c1.x, c1.y);
+      drawCtx.lineTo(c2.x, c2.y);
+      drawCtx.lineTo(c3.x, c3.y);
+      drawCtx.closePath();
+      drawCtx.fill();
+
+      // Border — slightly more transparent during edit too
+      drawCtx.globalAlpha = isEditing ? 0.55 : 1;
+      drawCtx.beginPath();
+      drawCtx.moveTo(c0.x, c0.y);
+      drawCtx.lineTo(c1.x, c1.y);
+      drawCtx.lineTo(c2.x, c2.y);
+      drawCtx.lineTo(c3.x, c3.y);
+      drawCtx.closePath();
+      drawCtx.stroke();
+      drawCtx.globalAlpha = 1;
+
+      // Middle axis line (dashed, subtle)
+      drawCtx.save();
+      drawCtx.setLineDash([5, 4]);
+      drawCtx.globalAlpha = isEditing ? 0.25 : 0.35;
+      drawCtx.beginPath();
+      drawCtx.moveTo((c0.x+c3.x)/2, (c0.y+c3.y)/2);
+      drawCtx.lineTo((c1.x+c2.x)/2, (c1.y+c2.y)/2);
+      drawCtx.stroke();
+      drawCtx.restore();
+    }
+    if (preview) drawAngleDistance(p0, p1, baseColor);
   }
 
   // EDIT HANDLES
@@ -740,13 +986,58 @@ function drawShape(d, selected, W, H, preview) {
     drawCtx.setLineDash([]);
     getHandles(d).forEach((h) => {
       drawCtx.save();
-      drawCtx.beginPath();
-      drawCtx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2);
-      drawCtx.fillStyle = "#0D1117";
-      drawCtx.strokeStyle = "#3B82F6";
-      drawCtx.lineWidth = 1.5;
-      drawCtx.fill();
-      drawCtx.stroke();
+
+      if (h.ptIdx === "rot") {
+        // ── Rotation handle: gold ring + arc arrow ──
+        const R = HANDLE_R + 2;
+        drawCtx.beginPath();
+        drawCtx.arc(h.x, h.y, R, 0, Math.PI * 2);
+        drawCtx.fillStyle = "rgba(13,17,23,0.9)";
+        drawCtx.strokeStyle = "#F59E0B";
+        drawCtx.lineWidth = 1.5;
+        drawCtx.fill();
+        drawCtx.stroke();
+        // Small rotation arc arrow inside
+        drawCtx.strokeStyle = "#F59E0B";
+        drawCtx.lineWidth = 1.5;
+        drawCtx.beginPath();
+        drawCtx.arc(h.x, h.y, R - 3, 0.4, Math.PI * 1.7);
+        drawCtx.stroke();
+        // Arrow head at end of arc
+        const aEnd = Math.PI * 1.7;
+        const ax2 = h.x + (R-3) * Math.cos(aEnd), ay2 = h.y + (R-3) * Math.sin(aEnd);
+        drawCtx.beginPath();
+        drawCtx.moveTo(ax2, ay2 - 3);
+        drawCtx.lineTo(ax2 + 3, ay2);
+        drawCtx.lineTo(ax2 - 2, ay2 + 2);
+        drawCtx.stroke();
+
+      } else if (h.ptIdx === "w") {
+        // ── Width handle: diamond shape ──
+        const R = HANDLE_R;
+        drawCtx.beginPath();
+        drawCtx.moveTo(h.x,     h.y - R);
+        drawCtx.lineTo(h.x + R, h.y    );
+        drawCtx.lineTo(h.x,     h.y + R);
+        drawCtx.lineTo(h.x - R, h.y    );
+        drawCtx.closePath();
+        drawCtx.fillStyle = "#0D1117";
+        drawCtx.strokeStyle = "#00D26A";
+        drawCtx.lineWidth = 1.5;
+        drawCtx.fill();
+        drawCtx.stroke();
+
+      } else {
+        // ── Standard handle: circle ──
+        drawCtx.beginPath();
+        drawCtx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2);
+        drawCtx.fillStyle = "#0D1117";
+        drawCtx.strokeStyle = "#3B82F6";
+        drawCtx.lineWidth = 1.5;
+        drawCtx.fill();
+        drawCtx.stroke();
+      }
+
       drawCtx.restore();
     });
   }
@@ -818,6 +1109,157 @@ function _fmtSepLabel(bucket, tfType) {
     return `S${week}`;
   }
   return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", timeZone: "UTC" });
+}
+
+// ── FOREX SESSIONS ────────────────────────────────────────
+function _inForexSession(utcHour, utcMin, startH, endH) {
+  // Offset applied only to session boundaries, NOT to the candle hour.
+  // Effect: zone shifts on the UTC axis when checkbox is ticked.
+  //   offset=0  → NY zone starts at 13h UTC (matches UTC data)
+  //   offset=+2 → NY zone starts at 15h UTC (matches local clock on UTC chart)
+  const s = (((startH + _forexTzOffset) % 24 + 24) % 24) * 60;
+  const e = (((endH   + _forexTzOffset) % 24 + 24) % 24) * 60;
+  const m = utcHour * 60 + utcMin;
+  return s < e ? (m >= s && m < e) : (m >= s || m < e);
+}
+
+const _BROWSER_TZ_OFFSET = -(new Date().getTimezoneOffset()) / 60; // e.g. +2 for UTC+2
+
+function toggleForexLocalTz() {
+  const cb = document.getElementById("forex-local-tz");
+  if (!cb) return;
+
+  _forexTzOffset = cb.checked ? _BROWSER_TZ_OFFSET : 0;
+
+  const info = document.getElementById("forex-tz-info");
+  if (info) {
+    info.textContent = cb.checked
+      ? `Fuseau local : UTC${_BROWSER_TZ_OFFSET >= 0 ? "+" : ""}${_BROWSER_TZ_OFFSET}`
+      : "Données en UTC (défaut)";
+  }
+  drawRedraw();
+}
+
+function _initForexTzSelect() {
+  // Nothing to pre-select — default is UTC (offset 0, checkbox unchecked)
+}
+
+function toggleForexSession(key) {
+  if (key === "all") {
+    const anyOn = Object.values(FOREX_SESSIONS).some(s => s.enabled);
+    Object.keys(FOREX_SESSIONS).forEach(k => { FOREX_SESSIONS[k].enabled = !anyOn; });
+    Object.keys(FOREX_SESSIONS).forEach(k => {
+      const el = document.getElementById("forex-" + k);
+      if (el) el.checked = FOREX_SESSIONS[k].enabled;
+    });
+  } else {
+    FOREX_SESSIONS[key].enabled = !FOREX_SESSIONS[key].enabled;
+    const el = document.getElementById("forex-" + key);
+    if (el) el.checked = FOREX_SESSIONS[key].enabled;
+  }
+
+  const anyEnabled = Object.values(FOREX_SESSIONS).some(s => s.enabled);
+  document.getElementById("btn-forex")?.classList.toggle("active", anyEnabled);
+  drawRedraw();
+}
+
+function drawForexSessions(W, H) {
+  if (!sortedTimes.length || !chart || activeTF > 14400) return;
+
+  const active = Object.values(FOREX_SESSIONS).filter(s => s.enabled);
+  if (!active.length) return;
+
+  const ts = chart.timeScale();
+  const vr = ts.getVisibleRange();
+  if (!vr) return;
+
+  // Find visible index range with 1-bar margin on each side
+  let lo = 0, hi = sortedTimes.length - 1;
+  while (lo < hi - 1 && sortedTimes[lo + 1] < vr.from) lo++;
+  while (hi > lo + 1 && sortedTimes[hi - 1] > vr.to)   hi--;
+  const scanLo = Math.max(0, lo - 1);
+  const scanHi = Math.min(sortedTimes.length - 1, hi + 1);
+
+  active.forEach(sess => {
+    const opens = []; // {x} positions where session opens (for lines + labels)
+    let zoneX0 = null;
+
+    // ── PASS 1: zones ──────────────────────────────────
+    for (let i = scanLo; i <= scanHi; i++) {
+      const t  = sortedTimes[i];
+      const d  = new Date(t * 1000);
+      const cur  = _inForexSession(d.getUTCHours(), d.getUTCMinutes(), sess.start, sess.end);
+      const prev = i > 0
+        ? (() => { const pd = new Date(sortedTimes[i - 1] * 1000);
+                   return _inForexSession(pd.getUTCHours(), pd.getUTCMinutes(), sess.start, sess.end); })()
+        : false;
+
+      const x = ts.timeToCoordinate(t);
+
+      if (cur && !prev) {
+        // Session opens — mark zone start
+        zoneX0 = (i < lo) ? 0 : (x ?? 0);
+        if (x !== null && i >= lo) opens.push(x);
+      }
+
+      if (!cur && prev && zoneX0 !== null) {
+        // Session closes — flush zone
+        const x1 = x ?? W;
+        if (x1 > zoneX0) {
+          drawCtx.save();
+          drawCtx.fillStyle = sess.zone;
+          drawCtx.fillRect(zoneX0, 0, x1 - zoneX0, H);
+          drawCtx.restore();
+        }
+        zoneX0 = null;
+      }
+    }
+    // Flush zone still open at right edge
+    if (zoneX0 !== null) {
+      drawCtx.save();
+      drawCtx.fillStyle = sess.zone;
+      drawCtx.fillRect(zoneX0, 0, W - zoneX0, H);
+      drawCtx.restore();
+    }
+
+    // ── PASS 2: opening lines + labels ─────────────────
+    opens.forEach(x => {
+      drawCtx.save();
+
+      // Dashed vertical line
+      drawCtx.beginPath();
+      drawCtx.strokeStyle = sess.line;
+      drawCtx.lineWidth    = 1;
+      drawCtx.globalAlpha  = 0.55;
+      drawCtx.setLineDash([4, 3]);
+      drawCtx.moveTo(x, 0);
+      drawCtx.lineTo(x, H);
+      drawCtx.stroke();
+
+      // Label badge at top
+      drawCtx.setLineDash([]);
+      drawCtx.globalAlpha = 1;
+      drawCtx.font = "700 8px 'JetBrains Mono', monospace";
+      const text  = sess.label.toUpperCase();
+      const tw    = drawCtx.measureText(text).width;
+      // Place forex labels on a second row (y≈26) so they never collide
+      // with the separator date labels that sit at y≈4
+      const hasSep = separatorTF !== null;
+      const ly = hasSep ? 26 : 12;
+      const lx = x + 4;
+      // Background pill
+      drawCtx.fillStyle = "rgba(6,8,16,0.82)";
+      drawCtx.beginPath();
+      drawCtx.roundRect?.(lx - 2, ly - 9, tw + 6, 12, 2) ??
+        drawCtx.rect(lx - 2, ly - 9, tw + 6, 12);
+      drawCtx.fill();
+      // Text
+      drawCtx.fillStyle = sess.line;
+      drawCtx.fillText(text, lx + 1, ly);
+
+      drawCtx.restore();
+    });
+  });
 }
 
 function drawSeparators(W, H) {

@@ -15,12 +15,16 @@ function initChart() {
     },
     localization: {
       locale: "fr-FR",
+      // Force UTC display — data is UTC, everything must read UTC
       timeFormatter: (t) => {
         const d = new Date(t * 1000);
-        return d.toLocaleDateString("fr-FR", {
-          weekday: "short", day: "numeric", month: "short",
-          year: "numeric", hour: "2-digit", minute: "2-digit",
-        });
+        const MOIS = ["jan","fév","mar","avr","mai","jun","jul","aoû","sep","oct","nov","déc"];
+        const JOURS = ["dim","lun","mar","mer","jeu","ven","sam"];
+        const hh = d.getUTCHours().toString().padStart(2,"0");
+        const mm = d.getUTCMinutes().toString().padStart(2,"0");
+        const time = `${hh}:${mm}`;
+        const date = `${JOURS[d.getUTCDay()]} ${d.getUTCDate()} ${MOIS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+        return `${date}  ${time} UTC`;
       },
     },
     grid: {
@@ -49,6 +53,18 @@ function initChart() {
       borderColor: "rgba(255,255,255,0.045)",
       timeVisible: true,
       secondsVisible: false,
+      // Axis labels also in UTC so they match the data and the session zones
+      tickMarkFormatter: (t, type) => {
+        const d = new Date(t * 1000);
+        const MOIS = ["jan","fév","mar","avr","mai","jun","jul","aoû","sep","oct","nov","déc"];
+        const hh = d.getUTCHours().toString().padStart(2,"0");
+        const mm = d.getUTCMinutes().toString().padStart(2,"0");
+        // type 0=year, 1=month, 2=day, 3=time, 4=time+seconds
+        if (type >= 3) return `${hh}:${mm}`;
+        if (type === 2) return `${d.getUTCDate()} ${MOIS[d.getUTCMonth()]}`;
+        if (type === 1) return MOIS[d.getUTCMonth()];
+        return String(d.getUTCFullYear());
+      },
       textColor: "#4A5568",
       fixLeftEdge: false,
       fixRightEdge: false,
@@ -370,9 +386,9 @@ function _updateTopbarTicker(price, chgPct) {
 }
 
 function dateFromTime(t) {
-  if (typeof t === "number")
-    return new Date(t * 1000).toLocaleDateString("fr-FR");
-  return String(t);
+  if (typeof t !== "number") return String(t);
+  const d = new Date(t * 1000);
+  return `${d.getUTCDate().toString().padStart(2,"0")}/${(d.getUTCMonth()+1).toString().padStart(2,"0")}/${d.getUTCFullYear()}`;
 }
 
 // Fast number formatter

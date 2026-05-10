@@ -8,6 +8,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initChart();
   initDrawCanvas();
   setupPositionDrag();
+  _initForexTzSelect(); // Sync UTC offset selector to browser timezone
 
   // Replay bar controls
   document.getElementById("rp-play").addEventListener("click", () => {
@@ -144,6 +145,7 @@ document.addEventListener("keydown", (e) => {
       if (e.key === "5") setDrawTool("rect");
       if (e.key === "6") setDrawTool("fib");
       if (e.key === "7") setDrawTool("text");
+      if (e.key === "8") setDrawTool("channel");
       if (e.key === "r" || e.key === "R") setDrawTool("ray");
       if (e.key === "?") document.getElementById("shortcuts-overlay").classList.add("open");
     }
