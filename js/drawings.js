@@ -131,20 +131,32 @@ function toXY(time, price) {
     const lastX = ts.timeToCoordinate(lastTime);
     const firstX = ts.timeToCoordinate(firstTime);
     const barSpacing = getBarSpacingPx();
+    const tf = activeTF || baseTF || 60;
 
     // Check if time is in full baseCandles (replay future or historical)
     if (typeof baseCandles !== "undefined" && baseCandles && baseCandles.length > 0) {
-      const targetIdx = snapIndexInBase(time);
+      const maxBaseTime = baseCandles[baseCandles.length - 1].time;
+      const minBaseTime = baseCandles[0].time;
       const currentLastIdx = snapIndexInBase(lastTime);
 
-      if (targetIdx !== -1 && currentLastIdx !== -1 && lastX !== null && lastX !== undefined) {
-        const barDelta = targetIdx - currentLastIdx;
-        x = lastX + barDelta * barSpacing;
+      if (time <= maxBaseTime && time >= minBaseTime) {
+        const targetIdx = snapIndexInBase(time);
+        if (targetIdx !== -1 && currentLastIdx !== -1 && lastX !== null && lastX !== undefined) {
+          const barDelta = targetIdx - currentLastIdx;
+          x = lastX + barDelta * barSpacing;
+        }
+      } else if (time > maxBaseTime) {
+        // Future past the end of all baseCandles without clamping
+        const lastBaseIdx = baseCandles.length - 1;
+        const extraBars = Math.round((time - maxBaseTime) / tf);
+        const barDelta = (lastBaseIdx - currentLastIdx) + extraBars;
+        if (lastX !== null && lastX !== undefined) {
+          x = lastX + barDelta * barSpacing;
+        }
       }
     }
 
     if (x === null || x === undefined) {
-      const tf = activeTF || baseTF || 60;
       if (lastX !== null && lastX !== undefined) {
         const barDelta = (time - lastTime) / tf;
         x = lastX + barDelta * barSpacing;
@@ -175,15 +187,24 @@ function fromXY(x, y) {
     const lastTime = sortedTimes[n - 1];
     const lastX = ts.timeToCoordinate(lastTime);
     const barSpacing = getBarSpacingPx();
+    const tf = activeTF || baseTF || 60;
 
     if (lastX !== null && lastX !== undefined && barSpacing > 0.01) {
       const barsOff = Math.round((x - lastX) / barSpacing);
       if (typeof baseCandles !== "undefined" && baseCandles && baseCandles.length > 0) {
         const lastIdxInBase = snapIndexInBase(lastTime);
-        const targetIdx = Math.max(0, Math.min(baseCandles.length - 1, lastIdxInBase + barsOff));
-        time = baseCandles[targetIdx].time;
+        const targetIdx = lastIdxInBase + barsOff;
+        if (targetIdx >= 0 && targetIdx < baseCandles.length) {
+          time = baseCandles[targetIdx].time;
+        } else if (targetIdx >= baseCandles.length) {
+          // Future space beyond the end of data without clamping
+          const maxBaseTime = baseCandles[baseCandles.length - 1].time;
+          const extraBars = targetIdx - (baseCandles.length - 1);
+          time = maxBaseTime + extraBars * tf;
+        } else {
+          time = baseCandles[0].time + targetIdx * tf;
+        }
       } else {
-        const tf = activeTF || baseTF || 60;
         time = lastTime + barsOff * tf;
       }
     }
