@@ -5,6 +5,7 @@ import { useReplayStore } from '../../store/useReplayStore';
 import { useUIStore } from '../../store/useUIStore';
 import { DrawingCanvas } from './DrawingCanvas';
 import { fetchHistoricalData } from '../../services/historicalApi';
+import { Candle } from '../../types/market';
 
 export const TradingChart: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -15,6 +16,7 @@ export const TradingChart: React.FC = () => {
   const [indicatorSeriesMap, setIndicatorSeriesMap] = useState<Map<string, ISeriesApi<'Line'>>>(new Map());
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [isLoading, setIsLoading] = useState(false);
+  const [hoverCandleInfo, setHoverCandleInfo] = useState<{ x: number; time: number; candle: Candle } | null>(null);
 
   const lastVisibleRangeRef = useRef<{ from: number; to: number } | null>(null);
   const prevTFRef = useRef<number | null>(null);
@@ -79,7 +81,7 @@ export const TradingChart: React.FC = () => {
       visible: showVolume,
     });
     newChart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.88, bottom: 0 },
+      scaleMargins: { top: 0.72, bottom: 0 },
     });
 
     setChart(newChart);
@@ -191,7 +193,7 @@ export const TradingChart: React.FC = () => {
           displayCandles.map((c) => ({
             time: c.time as any,
             value: c.volume,
-            color: c.close >= c.open ? 'rgba(0, 196, 110, 0.22)' : 'rgba(244, 63, 94, 0.22)',
+            color: c.close >= c.open ? 'rgba(16, 185, 129, 0.65)' : 'rgba(244, 63, 94, 0.65)',
           }))
         );
       }
@@ -215,7 +217,7 @@ export const TradingChart: React.FC = () => {
           scaleMargins: { top: 0.04, bottom: hasSubPanes ? 0.36 : 0.18 },
         });
         chart.priceScale('volume').applyOptions({
-          scaleMargins: { top: hasSubPanes ? 0.67 : 0.82, bottom: hasSubPanes ? 0.18 : 0.02 },
+          scaleMargins: { top: hasSubPanes ? 0.58 : 0.72, bottom: hasSubPanes ? 0.20 : 0 },
         });
       } catch (e) {}
 
@@ -380,7 +382,31 @@ export const TradingChart: React.FC = () => {
     }
   }, [activeModal, chart, currentSymbol, setSnapshotDataUrl]);
 
-  // ── REPLAY PICK HANDLER ───────────────────────────────────
+  // ── REPLAY PICK & CUT BAR HANDLER ─────────────────────────
+  const handleChartMouseMove = (e: React.MouseEvent) => {
+    if (!isPicking || !chart || !baseCandles.length) {
+      if (hoverCandleInfo) setHoverCandleInfo(null);
+      return;
+    }
+    const rect = chartWrapperRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mx = e.clientX - rect.left;
+    const time = chart.timeScale().coordinateToTime(mx) as number | null;
+    if (time) {
+      let idx = baseCandles.findIndex((c) => c.time >= time);
+      if (idx === -1) idx = baseCandles.length - 1;
+      const candle = baseCandles[idx];
+      const snappedX = chart.timeScale().timeToCoordinate(candle.time as any) ?? mx;
+      setHoverCandleInfo({ x: snappedX, time: candle.time, candle });
+    }
+  };
+
+  const handleChartMouseLeave = () => {
+    if (isPicking) {
+      setHoverCandleInfo(null);
+    }
+  };
+
   const handleChartClick = (e: React.MouseEvent) => {
     if (!isPicking || !chart || !baseCandles.length) return;
     const rect = chartWrapperRef.current?.getBoundingClientRect();
@@ -394,6 +420,7 @@ export const TradingChart: React.FC = () => {
       setStartIndex(chosenIdx);
       setCurrentIndex(chosenIdx);
       setIsPicking(false);
+      setHoverCandleInfo(null);
       setIsActive(true);
       showToast('Mode Replay démarré !', 'success');
     }
@@ -422,7 +449,13 @@ export const TradingChart: React.FC = () => {
 
   return (
     <div id="chart-area" ref={containerRef}>
-      <div id="chart-container" onClick={handleChartClick}>
+      <div
+        id="chart-container"
+        onClick={handleChartClick}
+        onMouseMove={handleChartMouseMove}
+        onMouseLeave={handleChartMouseLeave}
+        style={{ cursor: isPicking ? 'crosshair' : undefined, position: 'relative' }}
+      >
         {/* Chart Canvas */}
         <div id="tv-chart" ref={chartWrapperRef} style={{ width: '100%', height: '100%' }}>
           <DrawingCanvas
@@ -433,12 +466,113 @@ export const TradingChart: React.FC = () => {
           />
         </div>
 
-        {/* Replay Start Hint */}
-        {isPicking && (
-          <div id="replay-hint" style={{ display: 'flex' }}>
-            <div className="rh-icon">⏱</div>
-            <div className="rh-text">Choisissez le point de départ</div>
-            <div className="rh-sub">Cliquez sur une bougie pour lancer le replay</div>
+        {/* ── REPLAY VISUAL CUT LINE INDICATOR ── */}
+        {isPicking && hoverCandleInfo && (
+          <div
+            className="replay-cut-container"
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: 0,
+              right: 0,
+              pointerEvents: 'none',
+              zIndex: 40,
+              overflow: 'hidden',
+            }}
+          >
+            {/* Future area shadow on right */}
+            <div
+              className="replay-future-shade"
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${hoverCandleInfo.x}px`,
+                right: 0,
+                background: 'rgba(10, 15, 30, 0.45)',
+                backdropFilter: 'blur(0.5px)',
+                borderLeft: '2px dashed #38BDF8',
+              }}
+            />
+
+            {/* Glowing Vertical Cut Line */}
+            <div
+              className="replay-cut-bar"
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${hoverCandleInfo.x - 1}px`,
+                width: '2px',
+                background: '#38BDF8',
+                boxShadow: '0 0 10px rgba(56, 189, 248, 0.8), 0 0 20px rgba(56, 189, 248, 0.4)',
+              }}
+            />
+
+            {/* Floating Top Badge with Date & Time */}
+            <div
+              className="replay-cut-badge"
+              style={{
+                position: 'absolute',
+                top: '16px',
+                left: `${hoverCandleInfo.x}px`,
+                transform: 'translateX(-50%)',
+                background: 'rgba(15, 23, 42, 0.95)',
+                border: '1px solid rgba(56, 189, 248, 0.6)',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.6), 0 0 12px rgba(56, 189, 248, 0.25)',
+                borderRadius: '6px',
+                padding: '5px 12px',
+                color: '#F8FAFC',
+                fontSize: '11px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '7px',
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+              }}
+            >
+              <span style={{ color: '#38BDF8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="6" cy="6" r="3" />
+                  <circle cx="6" cy="18" r="3" />
+                  <line x1="20" y1="4" x2="8.12" y2="15.88" />
+                  <line x1="14.47" y1="14.48" x2="20" y2="20" />
+                  <line x1="8.12" y1="8.12" x2="12" y2="12" />
+                </svg>
+                Couper ici :
+              </span>
+              <span style={{ fontFamily: 'var(--mono)', color: '#38BDF8' }}>
+                {new Date(hoverCandleInfo.candle.time * 1000).toLocaleString('fr-FR', {
+                  day: '2-digit',
+                  month: 'short',
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </span>
+              <span style={{ color: '#94A3B8', fontSize: '10px' }}>
+                ({hoverCandleInfo.candle.close.toFixed(hoverCandleInfo.candle.close < 10 ? 5 : 2)})
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Replay Start Hint (Floating Top Glass Banner) */}
+        {isPicking && !hoverCandleInfo && (
+          <div id="replay-hint">
+            <div className="rh-icon-wrap">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+            </div>
+            <div className="rh-content">
+              <div className="rh-text">Mode Replay : Choisissez le point de départ</div>
+              <div className="rh-sub">Survolez le graphique et cliquez sur une bougie pour couper</div>
+            </div>
+            <div className="rh-badge">Échap pour quitter</div>
           </div>
         )}
 

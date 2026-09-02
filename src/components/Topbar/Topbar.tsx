@@ -68,187 +68,107 @@ export const Topbar: React.FC = () => {
     }
   };
 
+  const getMarketBadge = (symbol: string) => {
+    const s = symbol.toUpperCase();
+    if (s.startsWith('R_') || s.includes('VOLATILITY') || s.includes('BOOM') || s.includes('CRASH') || s.includes('STEP') || s.includes('JUMP') || s.includes('1HZ')) {
+      return { label: 'SYNTH', type: 'synth' };
+    }
+    if (s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('XRP') || s.includes('BNB') || s.includes('DOGE') || s.includes('CRYPTO')) {
+      return { label: 'CRYPTO', type: 'crypto' };
+    }
+    if (s.includes('SPX') || s.includes('NAS') || s.includes('US30') || s.includes('GER40') || s.includes('CAC40') || s.includes('INDEX')) {
+      return { label: 'INDEX', type: 'index' };
+    }
+    if (s.includes('XAU') || s.includes('GOLD') || s.includes('OIL') || s.includes('XAG') || s.includes('BRENT')) {
+      return { label: 'COMMO', type: 'commo' };
+    }
+    return { label: 'FX', type: 'fx' };
+  };
+
+  const marketBadge = getMarketBadge(currentSymbol);
+
   return (
     <div id="topbar">
-      {/* Left group: logo + tools */}
+      {/* Left group: asset selector + witnesses + segmented tools */}
       <div className="topbar-left">
-        {/* Logo */}
-        <div className="logo">
-          <svg className="logo-mark" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect width="26" height="26" rx="7" fill="url(#logo-g2)" />
-            <polyline
-              points="5 19 10 12 15 15.5 21 7"
-              stroke="white"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <defs>
-              <linearGradient id="logo-g2" x1="0" y1="0" x2="26" y2="26" gradientUnits="userSpaceOnUse">
-                <stop stopColor="#1D4ED8" />
-                <stop offset="0.5" stopColor="#4F46E5" />
-                <stop offset="1" stopColor="#7C3AED" />
-              </linearGradient>
-            </defs>
-          </svg>
-          <span className="logo-text">Trade<strong>View Pro</strong></span>
-        </div>
-
-        {/* Live price ticker */}
-        <div id="topbar-ticker" onClick={() => openModal('live')} style={{ cursor: 'pointer' }} title="Changer de marché">
+        {/* 1. Interactive Asset Selector & Semantic Variation */}
+        <div
+          id="topbar-ticker"
+          className="topbar-asset-selector"
+          onClick={() => openModal('live')}
+          title="Changer d'actif / Recherche de symboles"
+        >
+          <span className={`market-badge ${marketBadge.type}`}>{marketBadge.label}</span>
           <span id="ticker-symbol" className="ticker-symbol">{currentSymbol}</span>
+          <svg className="ticker-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+          <div className="ticker-sep" />
           <span id="ticker-price" className="ticker-price">
             {lastPrice > 0 ? lastPrice.toFixed(lastPrice < 10 ? 5 : 2) : '—'}
           </span>
           <span
             id="ticker-change"
-            className={`ticker-change ${changePercent >= 0 ? 'up' : 'down'}`}
+            className={`ticker-change-pill ${changePercent >= 0 ? 'bull' : 'bear'}`}
           >
-            {changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%
+            <span className="ticker-change-arrow">{changePercent >= 0 ? '▲' : '▼'}</span>
+            <span>{changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%</span>
           </span>
         </div>
 
-        {/* Icon tools */}
+        {/* 2. Passive Technical Witnesses (Live Flux & Sync Status) */}
+        <div
+          className="topbar-witness-badge"
+          onClick={() => openModal('live')}
+          title="24 ms — Flux en direct connecté (Cliquez pour configurer)"
+        >
+          <span className="witness-dot live" />
+          <span className="witness-label">24 ms</span>
+        </div>
+
+        <div
+          className="topbar-witness-badge"
+          onClick={() => openModal('datasets')}
+          title="Base locale — Données synchronisées et sauvegardées"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" />
+            <polyline points="13 11 16 14 19 11" />
+          </svg>
+          <span className="witness-label">Sauvegardé</span>
+        </div>
+
+        <div className="topbar-divider" />
+
+        {/* 3. BLOC VUES & OUTILS: Volumes, Grille, Séparateurs, Sessions Forex, Immersion, Capture, Sons */}
         <div className="topbar-icon-group">
+          {/* Volume */}
           <button
             className={`tv-icon-btn ${showVolume ? 'active' : ''}`}
             id="btn-volume"
             onClick={toggleVolume}
-            title="Volume"
+            title={showVolume ? 'Volume histogramme (Activé)' : 'Volume histogramme (Désactivé)'}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="2" y="14" width="4" height="6" rx="1" />
               <rect x="9" y="9" width="4" height="11" rx="1" />
               <rect x="16" y="4" width="4" height="16" rx="1" />
             </svg>
           </button>
 
+          {/* Grille */}
           <button
             className={`tv-icon-btn ${showGrid ? 'active' : ''}`}
             id="btn-grid"
             onClick={toggleGrid}
-            title="Grille"
+            title={showGrid ? 'Grille graphique (Activée)' : 'Grille graphique (Désactivée)'}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <line x1="3" y1="9" x2="21" y2="9" />
               <line x1="3" y1="15" x2="21" y2="15" />
               <line x1="9" y1="3" x2="9" y2="21" />
               <line x1="15" y1="3" x2="15" y2="21" />
-            </svg>
-          </button>
-
-          <button
-            className="tv-icon-btn"
-            onClick={triggerFitContent}
-            title="Ajuster la vue"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 3h6v6" />
-              <path d="M9 21H3v-6" />
-              <path d="M21 3l-7 7" />
-              <path d="M3 21l7-7" />
-            </svg>
-          </button>
-
-          <button
-            className="tv-icon-btn"
-            onClick={exportCSV}
-            title="Exporter CSV"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="12" y1="18" x2="12" y2="12" />
-              <polyline points="9 15 12 18 15 15" />
-            </svg>
-          </button>
-
-          <button
-            className={`tv-icon-btn ${isReplayActive || isPicking ? 'active' : ''}`}
-            id="btn-replay"
-            onClick={() => {
-              if (isReplayActive || isPicking) {
-                setIsActive(false);
-                setIsPicking(false);
-                showToast('Mode Replay quitté', 'info');
-              } else {
-                setIsPicking(true);
-                showToast('Cliquez sur une bougie pour lancer le replay', 'info');
-              }
-            }}
-            title="Mode Replay"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="9" />
-              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none" />
-            </svg>
-          </button>
-
-          {/* Données Live & Marchés */}
-          <button
-            className="tv-icon-btn"
-            id="btn-live"
-            onClick={() => openModal('live')}
-            title="Données Live & Historiques (Forex, Crypto, Synthetics)"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 12.55a11 11 0 0 1 14.08 0" />
-              <path d="M1.42 9a16 16 0 0 1 21.16 0" />
-              <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-              <line x1="12" y1="20" x2="12.01" y2="20" strokeWidth="3" />
-            </svg>
-            <span className="live-dot-indicator online" />
-          </button>
-
-          {/* Datasets / Sessions */}
-          <button
-            className="tv-icon-btn"
-            id="btn-datasets"
-            onClick={() => openModal('datasets')}
-            title="Mes Datasets & Sessions"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <ellipse cx="12" cy="5" rx="9" ry="3" />
-              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-            </svg>
-          </button>
-
-          {/* Capture HD button */}
-          <button
-            className="tv-icon-btn"
-            id="btn-snapshot"
-            onClick={() => openModal('snapshot')}
-            title="Capture d'écran HD (P)"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-              <circle cx="12" cy="13" r="4" />
-            </svg>
-          </button>
-
-          {/* Fullscreen button */}
-          <button
-            className="tv-icon-btn"
-            id="btn-fullscreen"
-            onClick={toggleFullscreen}
-            title="Mode Immersion / Plein Écran (F)"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
-            </svg>
-          </button>
-
-          <button
-            className={`tv-icon-btn ${soundEnabled ? 'active' : ''}`}
-            id="btn-sound"
-            onClick={toggleSound}
-            title="Sons trading"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
             </svg>
           </button>
 
@@ -260,7 +180,7 @@ export const Topbar: React.FC = () => {
               onClick={() => toggleDropdown('sep')}
               title="Séparateurs de session / période"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="8" y1="3" x2="8" y2="21" />
                 <line x1="16" y1="3" x2="16" y2="21" />
                 <line x1="3" y1="12" x2="5" y2="12" />
@@ -300,7 +220,7 @@ export const Topbar: React.FC = () => {
               className={`tv-icon-btn ${forexSessions.london || forexSessions.newyork || forexSessions.tokyo || forexSessions.sydney ? 'active' : ''}`}
               id="btn-forex"
               onClick={() => toggleDropdown('forex')}
-              title="Sessions Forex (Londres, New York, Tokyo, Sydney)"
+              title="Sessions Forex & Fuseaux horaires (Londres, New York, Tokyo, Sydney)"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="9" />
@@ -348,6 +268,71 @@ export const Topbar: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Mode Immersion / Plein écran */}
+          <button
+            className="tv-icon-btn"
+            id="btn-fullscreen"
+            onClick={toggleFullscreen}
+            title="Mode Immersion / Plein Écran (F)"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+            </svg>
+          </button>
+
+          {/* Capture d'écran HD */}
+          <button
+            className="tv-icon-btn"
+            id="btn-snapshot"
+            onClick={() => openModal('snapshot')}
+            title="Capture d'écran HD (P)"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+              <circle cx="12" cy="13" r="4" />
+            </svg>
+          </button>
+
+          {/* Sons de trading */}
+          <button
+            className={`tv-icon-btn ${soundEnabled ? 'active' : ''}`}
+            id="btn-sound"
+            onClick={toggleSound}
+            title={soundEnabled ? 'Effets sonores (Activés)' : 'Effets sonores (Désactivés / Muet)'}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Séparateur large avant Replay */}
+        <div className="topbar-divider topbar-divider-replay" />
+
+        {/* 4. BLOC REPLAY TEMPOREL (Séparé et mis en valeur) */}
+        <div className="topbar-icon-group topbar-replay-group">
+          <button
+            className={`tv-icon-btn replay-btn-prominent ${isReplayActive || isPicking ? 'active' : ''}`}
+            id="btn-replay"
+            onClick={() => {
+              if (isReplayActive || isPicking) {
+                setIsActive(false);
+                setIsPicking(false);
+                showToast('Mode Replay quitté', 'info');
+              } else {
+                setIsPicking(true);
+                showToast('Cliquez sur une bougie pour lancer le replay', 'info');
+              }
+            }}
+            title="Mode Replay temporel (Raccourci : Espace)"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
         </div>
       </div>
 

@@ -1,12 +1,243 @@
-import React from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useDrawingStore } from '../../store/useDrawingStore';
 import { DrawingTool } from '../../types/drawing';
+
+const STORAGE_KEY = 'tv_draw_toolbar_pos';
+const SNAP_THRESHOLD = 20; // Magnetic snapping zone: within 20px of screen edges
+const SNAP_MARGIN = 14;     // Margin when snapped to edge
+const TOPBAR_HEIGHT = 46;
 
 export const DrawingSidebar: React.FC = () => {
   const { activeTool, setActiveTool, clearDrawings, removeDrawing, selectedDrawingId } = useDrawingStore();
 
+  // Position state (persisted in localStorage)
+  const [position, setPosition] = useState<{ x: number; y: number }>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+          return { x: parsed.x, y: parsed.y };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return { x: 14, y: 60 };
+  });
+
+  const [isDimmed, setIsDimmed] = useState<boolean>(false);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [isSnapped, setIsSnapped] = useState<boolean>(false);
+
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const fadeTimerRef = useRef<number | null>(null);
+  const isDraggingRef = useRef<boolean>(false);
+  const isDimmedRef = useRef<boolean>(false);
+  const dragStartRef = useRef<{ pointerX: number; pointerY: number; posX: number; posY: number }>({
+    pointerX: 0,
+    pointerY: 0,
+    posX: 0,
+    posY: 0,
+  });
+
+  isDraggingRef.current = isDragging;
+  isDimmedRef.current = isDimmed;
+
+  // ── CLAMP & MAGNETISM (SNAPPING) HELPER ─────────────────────
+  const clampAndSnap = useCallback((rawX: number, rawY: number) => {
+    const el = toolbarRef.current;
+    const w = el ? el.offsetWidth : 44;
+    const h = el ? el.offsetHeight : 450;
+    const winW = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    const winH = typeof window !== 'undefined' ? window.innerHeight : 800;
+
+    let x = rawX;
+    let y = rawY;
+    let snapped = false;
+
+    // Left magnetic edge (<20px from edge)
+    if (x < SNAP_THRESHOLD) {
+      x = SNAP_MARGIN;
+      snapped = true;
+    }
+    // Right magnetic edge (<20px from edge)
+    else if (winW - (x + w) < SNAP_THRESHOLD) {
+      x = winW - w - SNAP_MARGIN;
+      snapped = true;
+    }
+
+    // Top magnetic edge (below topbar)
+    if (y - TOPBAR_HEIGHT < SNAP_THRESHOLD) {
+      y = TOPBAR_HEIGHT + SNAP_MARGIN;
+      snapped = true;
+    }
+    // Bottom magnetic edge
+    else if (winH - (y + h) < SNAP_THRESHOLD) {
+      y = winH - h - SNAP_MARGIN;
+      snapped = true;
+    }
+
+    // Strict boundary clamping so toolbar never gets lost off-screen
+    const maxX = Math.max(SNAP_MARGIN, winW - w - SNAP_MARGIN);
+    const maxY = Math.max(TOPBAR_HEIGHT + SNAP_MARGIN, winH - h - SNAP_MARGIN);
+    x = Math.max(SNAP_MARGIN, Math.min(x, maxX));
+    y = Math.max(TOPBAR_HEIGHT + 4, Math.min(y, maxY));
+
+    return { x, y, snapped };
+  }, []);
+
+  // ── KEEP POSITION VALID ON RESIZE / LOAD ────────────────────
+  useEffect(() => {
+    const handleResize = () => {
+      setPosition((prev) => {
+        const { x, y } = clampAndSnap(prev.x, prev.y);
+        return { x, y };
+      });
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [clampAndSnap]);
+
+  // ── ADAPTIVE OPACITY (2s IDLE -> 40%, < 50px PROXIMITY -> 100%) ──
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent | MouseEvent) => {
+      if (isDraggingRef.current) {
+        if (fadeTimerRef.current) {
+          clearTimeout(fadeTimerRef.current);
+          fadeTimerRef.current = null;
+        }
+        setIsDimmed(false);
+        return;
+      }
+
+      const el = toolbarRef.current;
+      if (!el) return;
+
+      const rect = el.getBoundingClientRect();
+      const dx = Math.max(rect.left - e.clientX, 0, e.clientX - rect.right);
+      const dy = Math.max(rect.top - e.clientY, 0, e.clientY - rect.bottom);
+      const distance = Math.hypot(dx, dy);
+
+      if (distance <= 50) {
+        // Immediately restore 100% opacity
+        if (fadeTimerRef.current) {
+          clearTimeout(fadeTimerRef.current);
+          fadeTimerRef.current = null;
+        }
+        setIsDimmed(false);
+      } else {
+        // Beyond 50px: schedule 40% dimming after 2 seconds of inactivity
+        if (!fadeTimerRef.current && !isDimmedRef.current) {
+          fadeTimerRef.current = window.setTimeout(() => {
+            setIsDimmed(true);
+            fadeTimerRef.current = null;
+          }, 2000);
+        }
+      }
+    };
+
+    // Initial 2s timer on mount
+    fadeTimerRef.current = window.setTimeout(() => {
+      setIsDimmed(true);
+      fadeTimerRef.current = null;
+    }, 2000);
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      if (fadeTimerRef.current) {
+        clearTimeout(fadeTimerRef.current);
+      }
+    };
+  }, []);
+
+  // ── DRAG HANDLER ────────────────────────────────────────────
+  const handlePointerDown = (e: React.PointerEvent) => {
+    // If clicking on an action button, do not start drag
+    if ((e.target as HTMLElement).closest('.draw-btn')) return;
+
+    e.preventDefault();
+    if (fadeTimerRef.current) {
+      clearTimeout(fadeTimerRef.current);
+      fadeTimerRef.current = null;
+    }
+    setIsDimmed(false);
+    setIsDragging(true);
+
+    dragStartRef.current = {
+      pointerX: e.clientX,
+      pointerY: e.clientY,
+      posX: position.x,
+      posY: position.y,
+    };
+
+    const handlePointerMove = (moveEvt: PointerEvent) => {
+      const rawX = dragStartRef.current.posX + (moveEvt.clientX - dragStartRef.current.pointerX);
+      const rawY = dragStartRef.current.posY + (moveEvt.clientY - dragStartRef.current.pointerY);
+      const { x, y, snapped } = clampAndSnap(rawX, rawY);
+      setPosition({ x, y });
+      setIsSnapped(snapped);
+    };
+
+    const handlePointerUp = (upEvt: PointerEvent) => {
+      setIsDragging(false);
+      setIsSnapped(false);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+
+      const rawX = dragStartRef.current.posX + (upEvt.clientX - dragStartRef.current.pointerX);
+      const rawY = dragStartRef.current.posY + (upEvt.clientY - dragStartRef.current.pointerY);
+      const finalPos = clampAndSnap(rawX, rawY);
+      setPosition({ x: finalPos.x, y: finalPos.y });
+
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ x: finalPos.x, y: finalPos.y }));
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  };
+
+  const handleMouseEnter = () => {
+    if (fadeTimerRef.current) {
+      clearTimeout(fadeTimerRef.current);
+      fadeTimerRef.current = null;
+    }
+    setIsDimmed(false);
+  };
+
+  const isNearRightEdge = typeof window !== 'undefined' && position.x > window.innerWidth - 160;
+
   return (
-    <div id="draw-toolbar">
+    <div
+      ref={toolbarRef}
+      id="draw-toolbar"
+      className={`${isDimmed ? 'dimmed' : ''} ${isDragging ? 'is-dragging' : ''} ${isSnapped ? 'is-snapped' : ''} ${isNearRightEdge ? 'tooltip-left' : ''}`}
+      style={{
+        left: `${position.x}px`,
+        top: `${position.y}px`,
+      }}
+      onPointerDown={handlePointerDown}
+      onMouseEnter={handleMouseEnter}
+    >
+      {/* Sleek Drag Grip Handle */}
+      <div className="draw-drag-handle" title="Glisser pour déplacer">
+        <div className="draw-drag-grip">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+
       {/* Selection */}
       <button
         className={`draw-btn ${activeTool === 'cursor' ? 'active' : ''}`}

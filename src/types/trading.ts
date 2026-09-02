@@ -17,6 +17,17 @@ export interface Position {
   closeReason?: 'TP' | 'SL' | 'MANUAL';
 }
 
+export interface PendingOrder {
+  id: string;
+  type: PositionType;
+  orderType: 'LIMIT' | 'STOP';
+  targetPrice: number;
+  sl: number | null;
+  tp: number | null;
+  size: number;
+  time: number;
+}
+
 export interface TradeMetrics {
   balance: number;
   initialBalance: number;
@@ -28,3 +39,4 @@ export interface TradeMetrics {
   maxDrawdown: number;
   totalPnL: number;
 }
+

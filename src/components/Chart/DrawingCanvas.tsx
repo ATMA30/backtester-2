@@ -76,7 +76,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     activeIndicators,
   } = useMarketStore();
 
-  const { activePosition } = useTradeStore();
+  const { activePosition, pendingOrders } = useTradeStore();
 
   const drawPtsRef = useRef<Point[]>([]);
   const isMouseDownRef = useRef(false);
@@ -578,6 +578,54 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       ctx.restore();
     }
 
+    // ── 3.2. RENDER PENDING ORDERS ON CHART ──────────────────
+    if (pendingOrders && pendingOrders.length > 0 && mainSeries) {
+      ctx.save();
+      for (const order of pendingOrders) {
+        const isLong = order.type === 'LONG';
+        const orderY = mainSeries.priceToCoordinate(order.targetPrice);
+        const slY = order.sl ? mainSeries.priceToCoordinate(order.sl) : null;
+        const tpY = order.tp ? mainSeries.priceToCoordinate(order.tp) : null;
+
+        if (orderY !== null && orderY !== undefined) {
+          ctx.strokeStyle = '#38BDF8';
+          ctx.lineWidth = 1.5 * dpr;
+          ctx.setLineDash([5 * dpr, 4 * dpr]);
+          ctx.beginPath();
+          ctx.moveTo(0, orderY * dpr);
+          ctx.lineTo(width * dpr, orderY * dpr);
+          ctx.stroke();
+
+          ctx.fillStyle = '#0284C7';
+          ctx.fillRect((width - 160) * dpr, (orderY - 10) * dpr, 150 * dpr, 20 * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
+          ctx.fillText(`⏳ ${isLong ? 'BUY' : 'SELL'} ${order.orderType} @ ${order.targetPrice.toFixed(5)}`, (width - 154) * dpr, (orderY + 4) * dpr);
+        }
+
+        if (slY !== null && slY !== undefined && order.sl) {
+          ctx.strokeStyle = 'rgba(244, 63, 94, 0.6)';
+          ctx.lineWidth = 1 * dpr;
+          ctx.setLineDash([3 * dpr, 3 * dpr]);
+          ctx.beginPath();
+          ctx.moveTo(0, slY * dpr);
+          ctx.lineTo(width * dpr, slY * dpr);
+          ctx.stroke();
+        }
+
+        if (tpY !== null && tpY !== undefined && order.tp) {
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+          ctx.lineWidth = 1 * dpr;
+          ctx.setLineDash([3 * dpr, 3 * dpr]);
+          ctx.beginPath();
+          ctx.moveTo(0, tpY * dpr);
+          ctx.lineTo(width * dpr, tpY * dpr);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
     // ── 3.5. RENDER VOLUME & OSCILLATOR SECTIONS ────────────
     const rsiInd = activeIndicators.find((i) => i.type === 'RSI');
     const macdInd = activeIndicators.find((i) => i.type === 'MACD');
@@ -830,11 +878,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       }
       ctx.restore();
     }
-  }, [drawings, selectedDrawingId, activeTool, currentStyle, toXY, width, height, mainSeries, separatorTF, forexSessions, activePosition, displayCandles, getBarSpacingPx, chart, activeIndicators]);
+  }, [drawings, selectedDrawingId, activeTool, currentStyle, toXY, width, height, mainSeries, separatorTF, forexSessions, activePosition, pendingOrders, displayCandles, getBarSpacingPx, chart, activeIndicators]);
 
   useEffect(() => {
     redraw();
-  }, [redraw, width, height, sortedTimes, displayCandles, separatorTF, forexSessions, activeTF, activeIndicators]);
+  }, [redraw, width, height, sortedTimes, displayCandles, separatorTF, forexSessions, activeTF, activeIndicators, pendingOrders]);
 
   useEffect(() => {
     if (!chart) return;
