@@ -33,4 +33,23 @@ export interface DatasetMeta {
   baseTF: number;
   createdAt: number;
   timeRange: string;
+  data?: Candle[];
 }
+
+export interface ActiveIndicator {
+  id: string;
+  type: 'SMA' | 'EMA' | 'RSI' | 'MACD' | 'BB' | 'VWAP';
+  period: number;
+  color: string;
+  series?: any;
+}
+
+export interface ForexSessionConfig {
+  sydney: boolean;
+  tokyo: boolean;
+  london: boolean;
+  newyork: boolean;
+  useLocalTz: boolean;
+}
+
+export type SeparatorTF = '1D' | '1W' | '1M' | '3M' | '1Y' | null;

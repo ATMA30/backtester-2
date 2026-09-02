@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Candle, MarketPair, TimeframeDef } from '../types/market';
+import { Candle, MarketPair, TimeframeDef, ActiveIndicator, ForexSessionConfig, SeparatorTF } from '../types/market';
 
 export const TIMEFRAME_DEFS: TimeframeDef[] = [
   { s: 60, label: '1m', tfType: 'm' },
@@ -69,6 +69,27 @@ export const ALL_MARKET_PAIRS: MarketPair[] = [
   { symbol: 'DOGEUSDT', binanceSymbol: 'DOGEUSDT', label: 'DOGE / USDT (Dogecoin)', category: 'Crypto', decimals: 5, pip: 0.00001 },
 ];
 
+export function aggregateCandles(candles: Candle[], targetTF: number, baseTF: number): Candle[] {
+  if (targetTF <= baseTF || !candles.length) return candles;
+  const groups = new Map<number, Candle[]>();
+  for (const c of candles) {
+    const bucket = Math.floor(c.time / targetTF) * targetTF;
+    if (!groups.has(bucket)) groups.set(bucket, []);
+    groups.get(bucket)!.push(c);
+  }
+  const result: Candle[] = [];
+  for (const [bucket, group] of groups.entries()) {
+    const open = group[0].open;
+    const high = Math.max(...group.map((c) => c.high));
+    const low = Math.min(...group.map((c) => c.low));
+    const close = group[group.length - 1].close;
+    const volume = group.reduce((sum, c) => sum + c.volume, 0);
+    result.push({ time: bucket, open, high, low, close, volume });
+  }
+  result.sort((a, b) => a.time - b.time);
+  return result;
+}
+
 interface MarketState {
   currentSymbol: string;
   activeTF: number;
@@ -77,23 +98,32 @@ interface MarketState {
   displayCandles: Candle[];
   sortedTimes: number[];
   isLiveConnected: boolean;
-  isLivePaused: boolean;
   historyRange: string;
   chartType: 'Candlestick' | 'Bar' | 'Line' | 'Area';
   showVolume: boolean;
   showGrid: boolean;
+  soundEnabled: boolean;
+  separatorTF: SeparatorTF;
+  forexSessions: ForexSessionConfig;
+  activeIndicators: ActiveIndicator[];
+  currentFitContentTrigger: number;
 
   setSymbol: (symbol: string) => void;
   setTimeframe: (tfSec: number) => void;
-  setBaseCandles: (candles: Candle[]) => void;
+  setBaseCandles: (candles: Candle[], baseTF?: number) => void;
   setDisplayCandles: (candles: Candle[]) => void;
   setLiveConnected: (connected: boolean) => void;
-  setLivePaused: (paused: boolean) => void;
   setHistoryRange: (range: string) => void;
   setChartType: (type: 'Candlestick' | 'Bar' | 'Line' | 'Area') => void;
   toggleVolume: () => void;
   toggleGrid: () => void;
-  updateLatestCandle: (candle: Candle) => void;
+  toggleSound: () => void;
+  triggerFitContent: () => void;
+  setSeparatorTF: (tf: SeparatorTF) => void;
+  toggleForexSession: (session: 'all' | 'sydney' | 'tokyo' | 'london' | 'newyork') => void;
+  toggleForexLocalTz: () => void;
+  addIndicator: (ind: ActiveIndicator) => void;
+  removeIndicator: (id: string) => void;
 }
 
 export const useMarketStore = create<MarketState>((set, get) => ({
@@ -104,42 +134,79 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   displayCandles: [],
   sortedTimes: [],
   isLiveConnected: false,
-  isLivePaused: false,
   historyRange: 'max',
   chartType: 'Candlestick',
   showVolume: true,
   showGrid: true,
+  soundEnabled: true,
+  separatorTF: null,
+  forexSessions: {
+    sydney: false,
+    tokyo: false,
+    london: false,
+    newyork: false,
+    useLocalTz: false,
+  },
+  activeIndicators: [],
+  currentFitContentTrigger: 0,
 
   setSymbol: (symbol) => set({ currentSymbol: symbol }),
-  setTimeframe: (activeTF) => set({ activeTF }),
-  setBaseCandles: (baseCandles) => {
+  setTimeframe: (activeTF) => {
+    const { baseCandles, baseTF } = get();
+    const aggregated = aggregateCandles(baseCandles, activeTF, baseTF);
+    set({
+      activeTF,
+      displayCandles: aggregated,
+      sortedTimes: aggregated.map((c) => c.time),
+    });
+  },
+  setBaseCandles: (baseCandles, customBaseTF) => {
+    const baseTF = customBaseTF || 86400;
     const sortedTimes = baseCandles.map((c) => c.time);
-    set({ baseCandles, displayCandles: baseCandles, sortedTimes });
+    set({
+      baseCandles,
+      displayCandles: baseCandles,
+      sortedTimes,
+      baseTF,
+      activeTF: baseTF,
+    });
   },
   setDisplayCandles: (displayCandles) => {
-    const sortedTimes = displayCandles.map((c) => c.time);
-    set({ displayCandles, sortedTimes });
+    set({
+      displayCandles,
+      sortedTimes: displayCandles.map((c) => c.time),
+    });
   },
   setLiveConnected: (isLiveConnected) => set({ isLiveConnected }),
-  setLivePaused: (isLivePaused) => set({ isLivePaused }),
   setHistoryRange: (historyRange) => set({ historyRange }),
   setChartType: (chartType) => set({ chartType }),
   toggleVolume: () => set((state) => ({ showVolume: !state.showVolume })),
   toggleGrid: () => set((state) => ({ showGrid: !state.showGrid })),
-  updateLatestCandle: (candle) => {
-    const { baseCandles, displayCandles } = get();
-    if (!baseCandles.length) return;
-    const last = baseCandles[baseCandles.length - 1];
-    let newBase = [...baseCandles];
-    if (candle.time === last.time) {
-      newBase[newBase.length - 1] = candle;
-    } else if (candle.time > last.time) {
-      newBase.push(candle);
-    }
-    set({
-      baseCandles: newBase,
-      displayCandles: newBase,
-      sortedTimes: newBase.map((c) => c.time),
-    });
-  },
+  toggleSound: () => set((state) => ({ soundEnabled: !state.soundEnabled })),
+  triggerFitContent: () => set((state) => ({ currentFitContentTrigger: state.currentFitContentTrigger + 1 })),
+  setSeparatorTF: (separatorTF) => set({ separatorTF }),
+  toggleForexSession: (session) =>
+    set((state) => {
+      const fs = { ...state.forexSessions };
+      if (session === 'all') {
+        const anyOn = fs.sydney || fs.tokyo || fs.london || fs.newyork;
+        fs.sydney = !anyOn;
+        fs.tokyo = !anyOn;
+        fs.london = !anyOn;
+        fs.newyork = !anyOn;
+      } else {
+        fs[session] = !fs[session];
+      }
+      return { forexSessions: fs };
+    }),
+  toggleForexLocalTz: () =>
+    set((state) => ({
+      forexSessions: {
+        ...state.forexSessions,
+        useLocalTz: !state.forexSessions.useLocalTz,
+      },
+    })),
+  addIndicator: (ind) => set((state) => ({ activeIndicators: [...state.activeIndicators, ind] })),
+  removeIndicator: (id) =>
+    set((state) => ({ activeIndicators: state.activeIndicators.filter((i) => i.id !== id) })),
 }));

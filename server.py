@@ -18,7 +18,7 @@ import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 PORT = 8089
-CACHE_DIR = os.path.join(os.path.dirname(__file__), ".market_cache")
+CACHE_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), ".market_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 class MarketDataHTTPHandler(SimpleHTTPRequestHandler):
@@ -39,6 +39,31 @@ class MarketDataHTTPHandler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/sources":
             self.handle_api_sources()
         else:
+            # If dist directory exists, serve from dist/
+            dist_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "dist")
+            if os.path.exists(dist_path):
+                req_file = parsed.path.lstrip("/")
+                if not req_file or req_file == "index.html":
+                    target = os.path.join(dist_path, "index.html")
+                    if os.path.exists(target):
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/html; charset=utf-8")
+                        self.end_headers()
+                        with open(target, "rb") as f:
+                            self.wfile.write(f.read())
+                        return
+                elif req_file.startswith("assets/"):
+                    target = os.path.join(dist_path, req_file)
+                    if os.path.exists(target):
+                        self.send_response(200)
+                        if target.endswith(".js"):
+                            self.send_header("Content-Type", "application/javascript")
+                        elif target.endswith(".css"):
+                            self.send_header("Content-Type", "text/css")
+                        self.end_headers()
+                        with open(target, "rb") as f:
+                            self.wfile.write(f.read())
+                        return
             super().do_GET()
 
     def handle_api_sources(self):

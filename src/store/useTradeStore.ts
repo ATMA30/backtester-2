@@ -1,16 +1,22 @@
 import { create } from 'zustand';
 import { Position, PositionType, TradeMetrics } from '../types/trading';
+import { sound } from '../services/audio';
 
 interface TradeState {
   balance: number;
   initialBalance: number;
   riskPercent: number;
-  positions: Position[];
+  quantity: number;
+  activePosition: Position | null;
   closedPositions: Position[];
-  
-  openPosition: (type: PositionType, entry: number, sl: number | null, tp: number | null, time: number) => void;
-  closePosition: (id: string, exitPrice: number, closeTime: number, reason: 'TP' | 'SL' | 'MANUAL') => void;
-  updatePositionsOnPrice: (currentPrice: number, currentTime: number) => void;
+
+  setRiskPercent: (risk: number) => void;
+  setQuantity: (qty: number) => void;
+  openTrade: (type: PositionType, entry: number, sl: number | null, tp: number | null, time: number) => void;
+  closePosition: (reason?: 'TP' | 'SL' | 'MANUAL', exitPrice?: number, closeTime?: number) => void;
+  closePartial: (percent: number, currentPrice: number) => void;
+  setBreakeven: (currentPrice: number) => void;
+  updatePrice: (currentPrice: number, currentTime: number) => void;
   resetAccount: () => void;
   getMetrics: () => TradeMetrics;
 }
@@ -18,18 +24,22 @@ interface TradeState {
 export const useTradeStore = create<TradeState>((set, get) => ({
   balance: 10000,
   initialBalance: 10000,
-  riskPercent: 1.0,
-  positions: [],
+  riskPercent: 2.0,
+  quantity: 1.0,
+  activePosition: null,
   closedPositions: [],
 
-  openPosition: (type, entry, sl, tp, time) => {
-    const { balance, riskPercent } = get();
+  setRiskPercent: (riskPercent) => set({ riskPercent }),
+  setQuantity: (quantity) => set({ quantity }),
+
+  openTrade: (type, entry, sl, tp, time) => {
+    const { balance, riskPercent, quantity } = get();
     const riskAmount = (balance * riskPercent) / 100;
     const slDistance = sl ? Math.abs(entry - sl) : entry * 0.01;
-    const size = slDistance > 0 ? riskAmount / slDistance : 1;
+    const size = slDistance > 0 ? riskAmount / slDistance : quantity;
 
-    const newPosition: Position = {
-      id: 'pos_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    const newPos: Position = {
+      id: 'trade_' + Date.now(),
       type,
       entry,
       sl,
@@ -39,48 +49,108 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       status: 'OPEN',
     };
 
-    set((state) => ({ positions: [...state.positions, newPosition] }));
+    set({ activePosition: newPos });
+    sound.playClick();
   },
 
-  closePosition: (id, exitPrice, closeTime, reason) => {
-    const { positions, closedPositions, balance } = get();
-    const pos = positions.find((p) => p.id === id);
-    if (!pos) return;
+  closePosition: (reason = 'MANUAL', exitPrice, closeTime) => {
+    const { activePosition, closedPositions, balance } = get();
+    if (!activePosition) return;
 
-    const pnl = pos.type === 'LONG' ? (exitPrice - pos.entry) * pos.size : (pos.entry - exitPrice) * pos.size;
+    const exit = exitPrice || activePosition.entry;
+    const cTime = closeTime || Date.now() / 1000;
+    const pnl =
+      activePosition.type === 'LONG'
+        ? (exit - activePosition.entry) * activePosition.size
+        : (activePosition.entry - exit) * activePosition.size;
     const pnlPercent = (pnl / balance) * 100;
 
-    const closedPos: Position = {
-      ...pos,
+    const closed: Position = {
+      ...activePosition,
       status: 'CLOSED',
-      exitPrice,
-      closeTime,
+      exitPrice: exit,
+      closeTime: cTime,
       closeReason: reason,
       pnl,
       pnlPercent,
     };
 
+    if (pnl > 0) sound.playOrderWin();
+    else sound.playOrderLoss();
+
     set({
       balance: balance + pnl,
-      positions: positions.filter((p) => p.id !== id),
-      closedPositions: [closedPos, ...closedPositions],
+      activePosition: null,
+      closedPositions: [closed, ...closedPositions],
     });
   },
 
-  updatePositionsOnPrice: (currentPrice, currentTime) => {
-    const { positions, closePosition } = get();
-    for (const p of positions) {
-      if (p.type === 'LONG') {
-        if (p.sl && currentPrice <= p.sl) closePosition(p.id, p.sl, currentTime, 'SL');
-        else if (p.tp && currentPrice >= p.tp) closePosition(p.id, p.tp, currentTime, 'TP');
-      } else if (p.type === 'SHORT') {
-        if (p.sl && currentPrice >= p.sl) closePosition(p.id, p.sl, currentTime, 'SL');
-        else if (p.tp && currentPrice <= p.tp) closePosition(p.id, p.tp, currentTime, 'TP');
+  closePartial: (percent, currentPrice) => {
+    const { activePosition, closedPositions, balance } = get();
+    if (!activePosition || percent <= 0 || percent >= 100) return;
+
+    const closeRatio = percent / 100;
+    const closedSize = activePosition.size * closeRatio;
+    const remainingSize = activePosition.size - closedSize;
+
+    const pnl =
+      activePosition.type === 'LONG'
+        ? (currentPrice - activePosition.entry) * closedSize
+        : (activePosition.entry - currentPrice) * closedSize;
+
+    const closedPart: Position = {
+      ...activePosition,
+      size: closedSize,
+      status: 'CLOSED',
+      exitPrice: currentPrice,
+      closeTime: Date.now() / 1000,
+      closeReason: 'MANUAL',
+      pnl,
+      pnlPercent: (pnl / balance) * 100,
+    };
+
+    if (pnl > 0) sound.playOrderWin();
+
+    set({
+      balance: balance + pnl,
+      activePosition: { ...activePosition, size: remainingSize },
+      closedPositions: [closedPart, ...closedPositions],
+    });
+  },
+
+  setBreakeven: () => {
+    const { activePosition } = get();
+    if (!activePosition) return;
+    set({ activePosition: { ...activePosition, sl: activePosition.entry } });
+    sound.playClick();
+  },
+
+  updatePrice: (currentPrice, currentTime) => {
+    const { activePosition, closePosition } = get();
+    if (!activePosition) return;
+
+    if (activePosition.type === 'LONG') {
+      if (activePosition.sl && currentPrice <= activePosition.sl) {
+        closePosition('SL', activePosition.sl, currentTime);
+      } else if (activePosition.tp && currentPrice >= activePosition.tp) {
+        closePosition('TP', activePosition.tp, currentTime);
+      }
+    } else if (activePosition.type === 'SHORT') {
+      if (activePosition.sl && currentPrice >= activePosition.sl) {
+        closePosition('SL', activePosition.sl, currentTime);
+      } else if (activePosition.tp && currentPrice <= activePosition.tp) {
+        closePosition('TP', activePosition.tp, currentTime);
       }
     }
   },
 
-  resetAccount: () => set({ balance: 10000, initialBalance: 10000, positions: [], closedPositions: [] }),
+  resetAccount: () =>
+    set({
+      balance: 10000,
+      initialBalance: 10000,
+      activePosition: null,
+      closedPositions: [],
+    }),
 
   getMetrics: () => {
     const { balance, initialBalance, closedPositions } = get();
