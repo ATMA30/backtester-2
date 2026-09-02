@@ -23,6 +23,8 @@ interface TradeState {
   setQuantity: (qty: number) => void;
   openTrade: (type: PositionType, entry: number, sl: number | null, tp: number | null, time: number, customSize?: number) => void;
   placePendingOrder: (type: PositionType, orderType: 'LIMIT' | 'STOP', targetPrice: number, sl: number | null, tp: number | null, time: number, customSize?: number) => void;
+  updateActivePositionSlTp: (sl: number | null, tp: number | null) => void;
+  updatePendingOrder: (id: string, updates: { targetPrice?: number; sl?: number | null; tp?: number | null }) => void;
   cancelPendingOrder: (id: string) => void;
   closePosition: (reason?: 'TP' | 'SL' | 'MANUAL', exitPrice?: number, closeTime?: number) => void;
   closePartial: (percent: number, currentPrice: number) => void;
@@ -95,6 +97,21 @@ export const useTradeStore = create<TradeState>((set, get) => ({
     };
 
     set({ pendingOrders: [...pendingOrders, newOrder] });
+    sound.playClick();
+  },
+
+  updateActivePositionSlTp: (sl, tp) => {
+    const { activePosition } = get();
+    if (!activePosition) return;
+    set({ activePosition: { ...activePosition, sl, tp } });
+    sound.playClick();
+  },
+
+  updatePendingOrder: (id, updates) => {
+    const { pendingOrders } = get();
+    set({
+      pendingOrders: pendingOrders.map((o) => (o.id === id ? { ...o, ...updates } : o)),
+    });
     sound.playClick();
   },
 

@@ -76,13 +76,24 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     activeIndicators,
   } = useMarketStore();
 
-  const { activePosition, pendingOrders } = useTradeStore();
+  const {
+    activePosition,
+    pendingOrders,
+    closePosition,
+    updateActivePositionSlTp,
+    updatePendingOrder,
+    cancelPendingOrder,
+  } = useTradeStore();
 
   const drawPtsRef = useRef<Point[]>([]);
   const isMouseDownRef = useRef(false);
   const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
   const dragHandleRef = useRef<{ drawingId: string; ptIdx: number } | null>(null);
   const dragBodyRef = useRef<{ drawingId: string; startPts: Point[]; startMouse: { x: number; y: number } } | null>(null);
+  const dragTradeRef = useRef<{
+    type: 'ACTIVE_SL' | 'ACTIVE_TP' | 'PENDING_TARGET' | 'PENDING_SL' | 'PENDING_TP';
+    orderId?: string;
+  } | null>(null);
   const [isCtrlDown, setIsCtrlDown] = useState(false);
 
   // ── KEY LISTENERS (DELETE & CONTROL FOR OHLC SNAP) ────────
@@ -260,6 +271,106 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     return { time: time || 0, price };
   }, [chart, mainSeries, sortedTimes, displayCandles, activeTF, baseTF, getBarSpacingPx, isCtrlDown]);
 
+  // ── HIT TESTING FOR POSITION & PENDING ORDER LINES / BUTTONS ──
+  const hitTestTrade = useCallback((mx: number, my: number) => {
+    if (!mainSeries) return null;
+
+    // 1. Active Position
+    if (activePosition) {
+      const entryY = mainSeries.priceToCoordinate(activePosition.entry);
+      const slY = activePosition.sl ? mainSeries.priceToCoordinate(activePosition.sl) : null;
+      const tpY = activePosition.tp ? mainSeries.priceToCoordinate(activePosition.tp) : null;
+
+      // Close Button on Entry Badge (right 36px of chart)
+      if (entryY !== null && entryY !== undefined) {
+        if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - entryY) < 14) {
+          return { action: 'CLOSE_ACTIVE' as const };
+        }
+      }
+
+      // Clear SL Button on SL Badge
+      if (slY !== null && slY !== undefined && activePosition.sl) {
+        if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - slY) < 14) {
+          return { action: 'CLEAR_ACTIVE_SL' as const };
+        }
+      }
+
+      // Clear TP Button on TP Badge
+      if (tpY !== null && tpY !== undefined && activePosition.tp) {
+        if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - tpY) < 14) {
+          return { action: 'CLEAR_ACTIVE_TP' as const };
+        }
+      }
+
+      // Drag SL Line
+      if (slY !== null && slY !== undefined && activePosition.sl) {
+        if (Math.abs(my - slY) < 12) {
+          return { action: 'DRAG' as const, type: 'ACTIVE_SL' as const };
+        }
+      }
+
+      // Drag TP Line
+      if (tpY !== null && tpY !== undefined && activePosition.tp) {
+        if (Math.abs(my - tpY) < 12) {
+          return { action: 'DRAG' as const, type: 'ACTIVE_TP' as const };
+        }
+      }
+    }
+
+    // 2. Pending Orders
+    if (pendingOrders && pendingOrders.length > 0) {
+      for (const o of pendingOrders) {
+        const orderY = mainSeries.priceToCoordinate(o.targetPrice);
+        const slY = o.sl ? mainSeries.priceToCoordinate(o.sl) : null;
+        const tpY = o.tp ? mainSeries.priceToCoordinate(o.tp) : null;
+
+        // Cancel Button on Pending Order Badge
+        if (orderY !== null && orderY !== undefined) {
+          if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - orderY) < 14) {
+            return { action: 'CANCEL_PENDING' as const, orderId: o.id };
+          }
+        }
+
+        // Cancel SL button on Pending SL Badge
+        if (slY !== null && slY !== undefined && o.sl) {
+          if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - slY) < 14) {
+            return { action: 'CLEAR_PENDING_SL' as const, orderId: o.id };
+          }
+        }
+
+        // Cancel TP button on Pending TP Badge
+        if (tpY !== null && tpY !== undefined && o.tp) {
+          if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - tpY) < 14) {
+            return { action: 'CLEAR_PENDING_TP' as const, orderId: o.id };
+          }
+        }
+
+        // Drag SL line
+        if (slY !== null && slY !== undefined && o.sl) {
+          if (Math.abs(my - slY) < 12) {
+            return { action: 'DRAG' as const, type: 'PENDING_SL' as const, orderId: o.id };
+          }
+        }
+
+        // Drag TP line
+        if (tpY !== null && tpY !== undefined && o.tp) {
+          if (Math.abs(my - tpY) < 12) {
+            return { action: 'DRAG' as const, type: 'PENDING_TP' as const, orderId: o.id };
+          }
+        }
+
+        // Drag Target Price line
+        if (orderY !== null && orderY !== undefined) {
+          if (Math.abs(my - orderY) < 12) {
+            return { action: 'DRAG' as const, type: 'PENDING_TARGET' as const, orderId: o.id };
+          }
+        }
+      }
+    }
+
+    return null;
+  }, [activePosition, pendingOrders, mainSeries, width]);
+
   // ── HIT TESTING FUNCTION ──────────────────────────────────
   const hitTest = useCallback((mx: number, my: number): { drawingId: string; handleIdx: number | null } | null => {
     // Exclude right price scale (last 65px) and bottom time scale (last 28px) so user can drag scales to zoom
@@ -271,10 +382,42 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     if (selectedDrawingId) {
       const selD = drawings.find((d) => d.id === selectedDrawingId);
       if (selD) {
-        for (let i = 0; i < selD.pts.length; i++) {
-          const xy = toXY(selD.pts[i].time, selD.pts[i].price);
-          if (xy.x !== null && xy.y !== null && Math.hypot(mx - xy.x, my - xy.y) < 14) {
-            return { drawingId: selD.id, handleIdx: i };
+        if ((selD.type === 'pos_long' || selD.type === 'pos_short') && selD.pts.length >= 3) {
+          const pEntry = toXY(selD.pts[0].time, selD.pts[0].price);
+          const pTP = toXY(selD.pts[1].time, selD.pts[1].price);
+          const pSL = toXY(selD.pts[2].time, selD.pts[2].price);
+
+          if (pEntry.x !== null && pEntry.y !== null && pTP.x !== null && pTP.y !== null && pSL.x !== null && pSL.y !== null) {
+            const minX = Math.min(pEntry.x, pTP.x);
+            const maxX = Math.max(pEntry.x, pTP.x);
+            const grabMargin = 16;
+
+            // 1. TP Top Handle & Top Edge (Handle 1)
+            if (Math.abs(my - pTP.y) < grabMargin && mx >= minX - grabMargin && mx <= maxX + grabMargin) {
+              return { drawingId: selD.id, handleIdx: 1 };
+            }
+
+            // 2. SL Bottom Handle & Bottom Edge (Handle 2)
+            if (Math.abs(my - pSL.y) < grabMargin && mx >= minX - grabMargin && mx <= maxX + grabMargin) {
+              return { drawingId: selD.id, handleIdx: 2 };
+            }
+
+            // 3. Right Edge Width Handle (Handle 5)
+            if (Math.abs(mx - maxX) < grabMargin && my >= Math.min(pTP.y, pSL.y) - grabMargin && my <= Math.max(pTP.y, pSL.y) + grabMargin) {
+              return { drawingId: selD.id, handleIdx: 5 };
+            }
+
+            // 4. Entry Line / Left Handle (Handle 0)
+            if (Math.abs(my - pEntry.y) < 12 && mx >= minX - grabMargin && mx <= maxX + grabMargin) {
+              return { drawingId: selD.id, handleIdx: 0 };
+            }
+          }
+        } else {
+          for (let i = 0; i < selD.pts.length; i++) {
+            const xy = toXY(selD.pts[i].time, selD.pts[i].price);
+            if (xy.x !== null && xy.y !== null && Math.hypot(mx - xy.x, my - xy.y) < 16) {
+              return { drawingId: selD.id, handleIdx: i };
+            }
           }
         }
       }
@@ -285,11 +428,13 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const d = drawings[i];
       if (d.hidden || d.pts.length === 0) continue;
 
-      // Handle vertices
-      for (let k = 0; k < d.pts.length; k++) {
-        const xy = toXY(d.pts[k].time, d.pts[k].price);
-        if (xy.x !== null && xy.y !== null && Math.hypot(mx - xy.x, my - xy.y) < 14) {
-          return { drawingId: d.id, handleIdx: k };
+      // Handle vertices (except for pos_long/pos_short handled below)
+      if (d.type !== 'pos_long' && d.type !== 'pos_short') {
+        for (let k = 0; k < d.pts.length; k++) {
+          const xy = toXY(d.pts[k].time, d.pts[k].price);
+          if (xy.x !== null && xy.y !== null && Math.hypot(mx - xy.x, my - xy.y) < 14) {
+            return { drawingId: d.id, handleIdx: k };
+          }
         }
       }
 
@@ -342,17 +487,40 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         }
       }
 
-      // Position Long / Short
+      // Position Long / Short (Generous grab areas for TP, SL, Edges and Body)
       if ((d.type === 'pos_long' || d.type === 'pos_short') && d.pts.length >= 3) {
         const pEntry = toXY(d.pts[0].time, d.pts[0].price);
         const pTP = toXY(d.pts[1].time, d.pts[1].price);
         const pSL = toXY(d.pts[2].time, d.pts[2].price);
         if (pEntry.x !== null && pEntry.y !== null && pTP.x !== null && pTP.y !== null && pSL.x !== null && pSL.y !== null) {
-          const minX = Math.min(pEntry.x, pTP.x) - 6;
-          const maxX = Math.max(pEntry.x, pTP.x) + 6;
-          const minY = Math.min(pEntry.y, pTP.y, pSL.y) - 6;
-          const maxY = Math.max(pEntry.y, pTP.y, pSL.y) + 6;
-          if (mx >= minX && mx <= maxX && my >= minY && my <= maxY) {
+          const minX = Math.min(pEntry.x, pTP.x);
+          const maxX = Math.max(pEntry.x, pTP.x);
+          const minY = Math.min(pEntry.y, pTP.y, pSL.y);
+          const maxY = Math.max(pEntry.y, pTP.y, pSL.y);
+          const grabMargin = 16;
+
+          // 1. Check TP top handle & edge (Handle 1)
+          if (Math.abs(my - pTP.y) < grabMargin && mx >= minX - grabMargin && mx <= maxX + grabMargin) {
+            return { drawingId: d.id, handleIdx: 1 };
+          }
+
+          // 2. Check SL bottom handle & edge (Handle 2)
+          if (Math.abs(my - pSL.y) < grabMargin && mx >= minX - grabMargin && mx <= maxX + grabMargin) {
+            return { drawingId: d.id, handleIdx: 2 };
+          }
+
+          // 3. Check Right edge width (Handle 5)
+          if (Math.abs(mx - maxX) < grabMargin && my >= minY - grabMargin && my <= maxY + grabMargin) {
+            return { drawingId: d.id, handleIdx: 5 };
+          }
+
+          // 4. Check Entry line (Handle 0)
+          if (Math.abs(my - pEntry.y) < 12 && mx >= minX - grabMargin && mx <= maxX + grabMargin) {
+            return { drawingId: d.id, handleIdx: 0 };
+          }
+
+          // 5. Check Body (inside green/red box) -> Move entire position
+          if (mx >= minX - 4 && mx <= maxX + 4 && my >= minY - 4 && my <= maxY + 4) {
             return { drawingId: d.id, handleIdx: null };
           }
         }
@@ -524,6 +692,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     if (activePosition && mainSeries) {
       ctx.save();
       const isLong = activePosition.type === 'LONG';
+      const dec = currentSymbol.includes('JPY') || activePosition.entry > 500 ? 2 : 5;
+      const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
       const entryY = mainSeries.priceToCoordinate(activePosition.entry);
       const slY = activePosition.sl ? mainSeries.priceToCoordinate(activePosition.sl) : null;
       const tpY = activePosition.tp ? mainSeries.priceToCoordinate(activePosition.tp) : null;
@@ -537,11 +707,26 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         ctx.lineTo(width * dpr, entryY * dpr);
         ctx.stroke();
 
-        ctx.fillStyle = isLong ? '#00C46E' : '#F43F5E';
-        ctx.fillRect((width - 130) * dpr, (entryY - 10) * dpr, 120 * dpr, 20 * dpr);
+        // Main Entry Badge
+        const bw = 165;
+        const bx = width - bw - 10;
+        const by = entryY - 11;
+        ctx.fillStyle = isLong ? 'rgba(0, 196, 110, 0.95)' : 'rgba(244, 63, 94, 0.95)';
+        ctx.fillRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 1 * dpr;
+        ctx.strokeRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+
         ctx.fillStyle = '#0B0E14';
-        ctx.font = `bold ${10 * dpr}px JetBrains Mono, monospace`;
-        ctx.fillText(`${isLong ? '▲ LONG' : '▼ SHORT'} @ ${activePosition.entry.toFixed(5)}`, (width - 124) * dpr, (entryY + 4) * dpr);
+        ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
+        ctx.fillText(`${isLong ? '▲ ACHAT' : '▼ VENTE'} ${activePosition.size}L @ ${activePosition.entry.toFixed(dec)}`, (bx + 6) * dpr, (entryY + 4) * dpr);
+
+        // Close Button [✕] inside badge
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.fillRect((width - 32) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `bold ${11 * dpr}px sans-serif`;
+        ctx.fillText('✕', (width - 27) * dpr, (entryY + 4) * dpr);
       }
 
       if (slY !== null && slY !== undefined && activePosition.sl) {
@@ -553,11 +738,26 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         ctx.lineTo(width * dpr, slY * dpr);
         ctx.stroke();
 
-        ctx.fillStyle = '#F43F5E';
-        ctx.fillRect((width - 110) * dpr, (slY - 10) * dpr, 100 * dpr, 20 * dpr);
+        const slPips = Math.abs(activePosition.entry - activePosition.sl) / pip;
+        const bw = 150;
+        const bx = width - bw - 10;
+        const by = slY - 11;
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.92)';
+        ctx.fillRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 1 * dpr;
+        ctx.strokeRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+
         ctx.fillStyle = '#FFFFFF';
-        ctx.font = `bold ${10 * dpr}px JetBrains Mono, monospace`;
-        ctx.fillText(`🛑 SL: ${activePosition.sl.toFixed(5)}`, (width - 104) * dpr, (slY + 4) * dpr);
+        ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
+        ctx.fillText(`🛑 SL: ${activePosition.sl.toFixed(dec)} (-${slPips.toFixed(1)}p)`, (bx + 6) * dpr, (slY + 4) * dpr);
+
+        // Clear SL Button [✕]
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.fillRect((width - 32) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `bold ${11 * dpr}px sans-serif`;
+        ctx.fillText('✕', (width - 27) * dpr, (slY + 4) * dpr);
       }
 
       if (tpY !== null && tpY !== undefined && activePosition.tp) {
@@ -569,11 +769,26 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         ctx.lineTo(width * dpr, tpY * dpr);
         ctx.stroke();
 
-        ctx.fillStyle = '#00C46E';
-        ctx.fillRect((width - 110) * dpr, (tpY - 10) * dpr, 100 * dpr, 20 * dpr);
+        const tpPips = Math.abs(activePosition.tp - activePosition.entry) / pip;
+        const bw = 150;
+        const bx = width - bw - 10;
+        const by = tpY - 11;
+        ctx.fillStyle = 'rgba(0, 196, 110, 0.92)';
+        ctx.fillRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 1 * dpr;
+        ctx.strokeRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+
         ctx.fillStyle = '#0B0E14';
-        ctx.font = `bold ${10 * dpr}px JetBrains Mono, monospace`;
-        ctx.fillText(`🎯 TP: ${activePosition.tp.toFixed(5)}`, (width - 104) * dpr, (tpY + 4) * dpr);
+        ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
+        ctx.fillText(`🎯 TP: ${activePosition.tp.toFixed(dec)} (+${tpPips.toFixed(1)}p)`, (bx + 6) * dpr, (tpY + 4) * dpr);
+
+        // Clear TP Button [✕]
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.fillRect((width - 32) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `bold ${11 * dpr}px sans-serif`;
+        ctx.fillText('✕', (width - 27) * dpr, (tpY + 4) * dpr);
       }
       ctx.restore();
     }
@@ -583,6 +798,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       ctx.save();
       for (const order of pendingOrders) {
         const isLong = order.type === 'LONG';
+        const dec = currentSymbol.includes('JPY') || order.targetPrice > 500 ? 2 : 5;
+        const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
         const orderY = mainSeries.priceToCoordinate(order.targetPrice);
         const slY = order.sl ? mainSeries.priceToCoordinate(order.sl) : null;
         const tpY = order.tp ? mainSeries.priceToCoordinate(order.tp) : null;
@@ -596,31 +813,79 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.lineTo(width * dpr, orderY * dpr);
           ctx.stroke();
 
+          const bw = 180;
+          const bx = width - bw - 10;
+          const by = orderY - 11;
           ctx.fillStyle = '#0284C7';
-          ctx.fillRect((width - 160) * dpr, (orderY - 10) * dpr, 150 * dpr, 20 * dpr);
+          ctx.fillRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.lineWidth = 1 * dpr;
+          ctx.strokeRect(bx * dpr, by * dpr, bw * dpr, 22 * dpr);
+
           ctx.fillStyle = '#FFFFFF';
           ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
-          ctx.fillText(`⏳ ${isLong ? 'BUY' : 'SELL'} ${order.orderType} @ ${order.targetPrice.toFixed(5)}`, (width - 154) * dpr, (orderY + 4) * dpr);
+          ctx.fillText(`⏳ ${isLong ? 'ACHAT' : 'VENTE'} ${order.orderType} @ ${order.targetPrice.toFixed(dec)}`, (bx + 6) * dpr, (orderY + 4) * dpr);
+
+          // Cancel Button [✕]
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+          ctx.fillRect((width - 32) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `bold ${11 * dpr}px sans-serif`;
+          ctx.fillText('✕', (width - 27) * dpr, (orderY + 4) * dpr);
         }
 
         if (slY !== null && slY !== undefined && order.sl) {
-          ctx.strokeStyle = 'rgba(244, 63, 94, 0.6)';
-          ctx.lineWidth = 1 * dpr;
+          ctx.strokeStyle = '#F43F5E';
+          ctx.lineWidth = 1.2 * dpr;
           ctx.setLineDash([3 * dpr, 3 * dpr]);
           ctx.beginPath();
           ctx.moveTo(0, slY * dpr);
           ctx.lineTo(width * dpr, slY * dpr);
           ctx.stroke();
+
+          const slPips = Math.abs(order.targetPrice - order.sl) / pip;
+          const bw = 140;
+          const bx = width - bw - 10;
+          const by = slY - 11;
+          ctx.fillStyle = 'rgba(244, 63, 94, 0.88)';
+          ctx.fillRect(bx * dpr, by * dpr, bw * dpr, 20 * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `bold ${9 * dpr}px JetBrains Mono, monospace`;
+          ctx.fillText(`🛑 SL: ${order.sl.toFixed(dec)} (-${slPips.toFixed(1)}p)`, (bx + 6) * dpr, (slY + 3) * dpr);
+
+          // Cancel SL [✕]
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+          ctx.fillRect((width - 30) * dpr, (by + 2) * dpr, 16 * dpr, 16 * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `bold ${10 * dpr}px sans-serif`;
+          ctx.fillText('✕', (width - 26) * dpr, (slY + 3) * dpr);
         }
 
         if (tpY !== null && tpY !== undefined && order.tp) {
-          ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
-          ctx.lineWidth = 1 * dpr;
+          ctx.strokeStyle = '#00C46E';
+          ctx.lineWidth = 1.2 * dpr;
           ctx.setLineDash([3 * dpr, 3 * dpr]);
           ctx.beginPath();
           ctx.moveTo(0, tpY * dpr);
           ctx.lineTo(width * dpr, tpY * dpr);
           ctx.stroke();
+
+          const tpPips = Math.abs(order.tp - order.targetPrice) / pip;
+          const bw = 140;
+          const bx = width - bw - 10;
+          const by = tpY - 11;
+          ctx.fillStyle = 'rgba(0, 196, 110, 0.88)';
+          ctx.fillRect(bx * dpr, by * dpr, bw * dpr, 20 * dpr);
+          ctx.fillStyle = '#0B0E14';
+          ctx.font = `bold ${9 * dpr}px JetBrains Mono, monospace`;
+          ctx.fillText(`🎯 TP: ${order.tp.toFixed(dec)} (+${tpPips.toFixed(1)}p)`, (bx + 6) * dpr, (tpY + 3) * dpr);
+
+          // Cancel TP [✕]
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+          ctx.fillRect((width - 30) * dpr, (by + 2) * dpr, 16 * dpr, 16 * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `bold ${10 * dpr}px sans-serif`;
+          ctx.fillText('✕', (width - 26) * dpr, (tpY + 3) * dpr);
         }
       }
       ctx.restore();
@@ -786,20 +1051,24 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const pSL = toXY(d.pts[2].time, d.pts[2].price);
 
         if (pEntry.x !== null && pEntry.y !== null && pTP.x !== null && pTP.y !== null && pSL.x !== null && pSL.y !== null) {
-          const rx = pEntry.x * dpr;
+          const rx = Math.min(pEntry.x, pTP.x) * dpr;
           const rw = Math.max(80, Math.abs(pTP.x - pEntry.x)) * dpr;
+          const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+          const dec = currentSymbol.includes('JPY') || d.pts[0].price > 500 ? 2 : 5;
 
           // Target Zone (Green)
-          ctx.fillStyle = 'rgba(0, 196, 110, 0.22)';
+          ctx.fillStyle = 'rgba(0, 196, 110, 0.20)';
           ctx.strokeStyle = '#00C46E';
+          ctx.lineWidth = 1.5 * dpr;
           const tpY = Math.min(pEntry.y, pTP.y) * dpr;
           const tpH = Math.abs(pTP.y - pEntry.y) * dpr;
           ctx.fillRect(rx, tpY, rw, tpH);
           ctx.strokeRect(rx, tpY, rw, tpH);
 
           // Stop Zone (Red)
-          ctx.fillStyle = 'rgba(244, 63, 94, 0.22)';
+          ctx.fillStyle = 'rgba(244, 63, 94, 0.20)';
           ctx.strokeStyle = '#F43F5E';
+          ctx.lineWidth = 1.5 * dpr;
           const slY = Math.min(pEntry.y, pSL.y) * dpr;
           const slH = Math.abs(pSL.y - pEntry.y) * dpr;
           ctx.fillRect(rx, slY, rw, slH);
@@ -813,13 +1082,35 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.lineTo(rx + rw, pEntry.y * dpr);
           ctx.stroke();
 
-          // Ratio R:R
+          // Metrics: Target Pips, Stop Pips & R:R
           const targetDist = Math.abs(d.pts[1].price - d.pts[0].price);
           const stopDist = Math.abs(d.pts[0].price - d.pts[2].price);
+          const targetPips = targetDist / pip;
+          const stopPips = stopDist / pip;
           const rr = stopDist > 0 ? (targetDist / stopDist).toFixed(2) : '1.00';
+
+          // R:R Center Badge
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+          ctx.fillRect(rx + 6 * dpr, (pEntry.y - 10) * dpr, 68 * dpr, 20 * dpr);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+          ctx.lineWidth = 1 * dpr;
+          ctx.strokeRect(rx + 6 * dpr, (pEntry.y - 10) * dpr, 68 * dpr, 20 * dpr);
+
           ctx.fillStyle = '#FFFFFF';
-          ctx.font = `bold ${10 * dpr}px JetBrains Mono, monospace`;
-          ctx.fillText(`R:R ${rr}`, rx + 6 * dpr, (pEntry.y - 4) * dpr);
+          ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
+          ctx.fillText(`R:R 1:${rr}`, rx + 11 * dpr, (pEntry.y + 4) * dpr);
+
+          // TP Top Label
+          ctx.fillStyle = '#00C46E';
+          ctx.font = `${8.5 * dpr}px JetBrains Mono, monospace`;
+          const tpLabelY = isLong ? tpY - 4 * dpr : tpY + tpH + 11 * dpr;
+          ctx.fillText(`TP: ${d.pts[1].price.toFixed(dec)} (+${targetPips.toFixed(1)}p)`, rx + 6 * dpr, tpLabelY);
+
+          // SL Bottom Label
+          ctx.fillStyle = '#F43F5E';
+          ctx.font = `${8.5 * dpr}px JetBrains Mono, monospace`;
+          const slLabelY = isLong ? slY + slH + 11 * dpr : slY - 4 * dpr;
+          ctx.fillText(`SL: ${d.pts[2].price.toFixed(dec)} (-${stopPips.toFixed(1)}p)`, rx + 6 * dpr, slLabelY);
         }
       } else if (d.type === 'text' && d.pts.length >= 1) {
         const p = toXY(d.pts[0].time, d.pts[0].price);
@@ -832,18 +1123,55 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
       // Render Handles if selected
       if (isSelected) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.strokeStyle = '#3B82F6';
-        ctx.lineWidth = 2 * dpr;
-        d.pts.forEach((pt) => {
-          const p = toXY(pt.time, pt.price);
-          if (p.x !== null && p.y !== null) {
-            ctx.beginPath();
-            ctx.arc(p.x * dpr, p.y * dpr, 4.5 * dpr, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
+        if (d.type === 'pos_long' || d.type === 'pos_short') {
+          const pEntry = toXY(d.pts[0].time, d.pts[0].price);
+          const pTP = toXY(d.pts[1].time, d.pts[1].price);
+          const pSL = toXY(d.pts[2].time, d.pts[2].price);
+
+          if (pEntry.x !== null && pEntry.y !== null && pTP.x !== null && pTP.y !== null && pSL.x !== null && pSL.y !== null) {
+            const leftX = Math.min(pEntry.x, pTP.x) * dpr;
+            const rightX = Math.max(pEntry.x, pTP.x) * dpr;
+            const centerX = (leftX + rightX) / 2;
+            const entryY = pEntry.y * dpr;
+            const tpY = pTP.y * dpr;
+            const slY = pSL.y * dpr;
+
+            const drawHandleDot = (x: number, y: number, color: string, radius = 5 * dpr) => {
+              ctx.fillStyle = '#FFFFFF';
+              ctx.strokeStyle = color;
+              ctx.lineWidth = 2 * dpr;
+              ctx.beginPath();
+              ctx.arc(x, y, radius, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            };
+
+            // TP Top Edge Handles (Green)
+            drawHandleDot(centerX, tpY, '#00C46E', 5.5 * dpr);
+            drawHandleDot(rightX, tpY, '#00C46E', 4.5 * dpr);
+
+            // SL Bottom Edge Handles (Red)
+            drawHandleDot(centerX, slY, '#F43F5E', 5.5 * dpr);
+            drawHandleDot(rightX, slY, '#F43F5E', 4.5 * dpr);
+
+            // Entry Middle Line Handles (Blue)
+            drawHandleDot(leftX, entryY, '#3B82F6', 5.5 * dpr);
+            drawHandleDot(rightX, entryY, '#3B82F6', 5.5 * dpr);
           }
-        });
+        } else {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = '#3B82F6';
+          ctx.lineWidth = 2 * dpr;
+          d.pts.forEach((pt) => {
+            const p = toXY(pt.time, pt.price);
+            if (p.x !== null && p.y !== null) {
+              ctx.beginPath();
+              ctx.arc(p.x * dpr, p.y * dpr, 4.5 * dpr, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+          });
+        }
       }
 
       ctx.restore();
@@ -905,6 +1233,45 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     mouseDownPosRef.current = { x: mx, y: my };
     isMouseDownRef.current = true;
+
+    // Check click / drag on Position / Pending Order Lines or Badges
+    const tradeHit = hitTestTrade(mx, my);
+    if (tradeHit) {
+      if (tradeHit.action === 'CLOSE_ACTIVE') {
+        closePosition('MANUAL');
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'CLEAR_ACTIVE_SL') {
+        if (activePosition) updateActivePositionSlTp(null, activePosition.tp);
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'CLEAR_ACTIVE_TP') {
+        if (activePosition) updateActivePositionSlTp(activePosition.sl, null);
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'CANCEL_PENDING' && tradeHit.orderId) {
+        cancelPendingOrder(tradeHit.orderId);
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'CLEAR_PENDING_SL' && tradeHit.orderId) {
+        updatePendingOrder(tradeHit.orderId, { sl: null });
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'CLEAR_PENDING_TP' && tradeHit.orderId) {
+        updatePendingOrder(tradeHit.orderId, { tp: null });
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'DRAG') {
+        dragTradeRef.current = { type: tradeHit.type, orderId: tradeHit.orderId };
+        return;
+      }
+    }
 
     if (activeTool === 'cursor') {
       const hit = hitTest(mx, my);
@@ -1054,11 +1421,116 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     const my = e.clientY - rect.top;
     const pt = fromXY(mx, my);
 
+    // 0. Dragging Active Trade / Pending Order Lines
+    if (dragTradeRef.current && isMouseDownRef.current) {
+      const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+      const minDistance = pip * 2;
+      const { type, orderId } = dragTradeRef.current;
+
+      if (type === 'ACTIVE_SL' && activePosition) {
+        const isLong = activePosition.type === 'LONG';
+        let validSl = pt.price;
+        if (isLong) {
+          validSl = Math.min(activePosition.entry - minDistance, pt.price);
+        } else {
+          validSl = Math.max(activePosition.entry + minDistance, pt.price);
+        }
+        updateActivePositionSlTp(validSl, activePosition.tp);
+      } else if (type === 'ACTIVE_TP' && activePosition) {
+        const isLong = activePosition.type === 'LONG';
+        let validTp = pt.price;
+        if (isLong) {
+          validTp = Math.max(activePosition.entry + minDistance, pt.price);
+        } else {
+          validTp = Math.min(activePosition.entry - minDistance, pt.price);
+        }
+        updateActivePositionSlTp(activePosition.sl, validTp);
+      } else if (type === 'PENDING_TARGET' && orderId) {
+        updatePendingOrder(orderId, { targetPrice: pt.price });
+      } else if (type === 'PENDING_SL' && orderId) {
+        const order = pendingOrders.find((o) => o.id === orderId);
+        if (order) {
+          const isLong = order.type === 'LONG';
+          let validSl = pt.price;
+          if (isLong) {
+            validSl = Math.min(order.targetPrice - minDistance, pt.price);
+          } else {
+            validSl = Math.max(order.targetPrice + minDistance, pt.price);
+          }
+          updatePendingOrder(orderId, { sl: validSl });
+        }
+      } else if (type === 'PENDING_TP' && orderId) {
+        const order = pendingOrders.find((o) => o.id === orderId);
+        if (order) {
+          const isLong = order.type === 'LONG';
+          let validTp = pt.price;
+          if (isLong) {
+            validTp = Math.max(order.targetPrice + minDistance, pt.price);
+          } else {
+            validTp = Math.min(order.targetPrice - minDistance, pt.price);
+          }
+          updatePendingOrder(orderId, { tp: validTp });
+        }
+      }
+
+      redraw();
+      return;
+    }
+
     // 1. Dragging a handle
     if (dragHandleRef.current && isMouseDownRef.current) {
       const { drawingId, ptIdx } = dragHandleRef.current;
       const d = drawings.find((item) => item.id === drawingId);
       if (d) {
+        if (d.type === 'pos_long' || d.type === 'pos_short') {
+          const isLong = d.type === 'pos_long';
+          const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+          const minDistance = pip * 2;
+          const newPts = [...d.pts];
+          const entryPrice = newPts[0].price;
+
+          if (ptIdx === 0) {
+            // Dragging Entry:
+            const newEntry = pt.price;
+            const deltaPrice = newEntry - entryPrice;
+            newPts[0] = { time: pt.time, price: newEntry };
+            // Move TP & SL synchronously to maintain pip distance
+            newPts[1] = { time: newPts[1].time, price: newPts[1].price + deltaPrice };
+            newPts[2] = { time: pt.time, price: newPts[2].price + deltaPrice };
+          } else if (ptIdx === 1) {
+            // Dragging TP (Take Profit):
+            // LONG: TP MUST BE > ENTRY
+            // SHORT: TP MUST BE < ENTRY
+            let validTp = pt.price;
+            if (isLong) {
+              validTp = Math.max(entryPrice + minDistance, pt.price);
+            } else {
+              validTp = Math.min(entryPrice - minDistance, pt.price);
+            }
+            const validTime = Math.max(newPts[0].time + 60, pt.time);
+            newPts[1] = { time: validTime, price: validTp };
+          } else if (ptIdx === 2) {
+            // Dragging SL (Stop Loss):
+            // LONG: SL MUST BE < ENTRY
+            // SHORT: SL MUST BE > ENTRY
+            let validSl = pt.price;
+            if (isLong) {
+              validSl = Math.min(entryPrice - minDistance, pt.price);
+            } else {
+              validSl = Math.max(entryPrice + minDistance, pt.price);
+            }
+            newPts[2] = { time: newPts[0].time, price: validSl };
+          } else if (ptIdx === 5) {
+            // Dragging Right edge width only
+            const validTime = Math.max(newPts[0].time + 60, pt.time);
+            newPts[1] = { time: validTime, price: newPts[1].price };
+          }
+
+          updateDrawing(drawingId, { pts: newPts });
+          redraw();
+          return;
+        }
+
         const newPts = [...d.pts];
         newPts[ptIdx] = pt;
         updateDrawing(drawingId, { pts: newPts });
@@ -1092,8 +1564,30 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     // 4. Cursor feedback on hover
     if (activeTool === 'cursor' && canvasRef.current && !isMouseDownRef.current) {
+      const tradeHit = hitTestTrade(mx, my);
+      if (tradeHit) {
+        if (tradeHit.action.startsWith('CLOSE') || tradeHit.action.startsWith('CANCEL') || tradeHit.action.startsWith('CLEAR')) {
+          canvasRef.current.style.cursor = 'pointer';
+        } else {
+          canvasRef.current.style.cursor = 'ns-resize';
+        }
+        return;
+      }
+
       const hit = hitTest(mx, my);
-      canvasRef.current.style.cursor = hit ? (hit.handleIdx !== null ? 'grab' : 'pointer') : 'default';
+      if (hit) {
+        if (hit.handleIdx === 1 || hit.handleIdx === 2 || hit.handleIdx === 0) {
+          canvasRef.current.style.cursor = 'ns-resize';
+        } else if (hit.handleIdx === 5) {
+          canvasRef.current.style.cursor = 'ew-resize';
+        } else if (hit.handleIdx !== null) {
+          canvasRef.current.style.cursor = 'grab';
+        } else {
+          canvasRef.current.style.cursor = 'move';
+        }
+      } else {
+        canvasRef.current.style.cursor = 'default';
+      }
     }
   };
 
@@ -1102,6 +1596,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     isMouseDownRef.current = false;
     dragHandleRef.current = null;
     dragBodyRef.current = null;
+    dragTradeRef.current = null;
 
     if (!mouseDownPosRef.current) return;
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -1153,14 +1648,53 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
   // Selected drawing position for floating toolbar
   const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId);
+  const isRR = selectedDrawing?.type === 'pos_long' || selectedDrawing?.type === 'pos_short';
+
   let toolbarPos: { x: number; y: number } | null = null;
   if (selectedDrawing && selectedDrawing.pts.length > 0) {
-    const p0 = toXY(selectedDrawing.pts[0].time, selectedDrawing.pts[0].price);
-    if (p0.x !== null && p0.y !== null) {
-      toolbarPos = {
-        x: Math.max(10, Math.min(width - 240, p0.x - 60)),
-        y: Math.max(10, Math.min(height - 50, p0.y - 45)),
-      };
+    const xyPts = selectedDrawing.pts
+      .map((p) => toXY(p.time, p.price))
+      .filter((p) => p.x !== null && p.y !== null) as { x: number; y: number }[];
+
+    if (xyPts.length > 0) {
+      const minX = Math.min(...xyPts.map((p) => p.x));
+      const maxX = Math.max(...xyPts.map((p) => p.x));
+      const minY = Math.min(...xyPts.map((p) => p.y));
+      const maxY = Math.max(...xyPts.map((p) => p.y));
+
+      if (isRR) {
+        // Place to the SIDE of the Position Box so it NEVER blocks handles, candles or metrics
+        const tbWidth = 110;
+        // Prefer placing to the right outside maxX
+        let tx = maxX + 18;
+        let ty = Math.min(height - 80, Math.max(20, minY + 10));
+
+        // If not enough room on the right (close to price scale), place to the left of the box
+        if (tx + tbWidth > width - 75) {
+          tx = minX - tbWidth - 18;
+        }
+        // If still off-screen to the left, place above the highest point
+        if (tx < 15) {
+          tx = Math.max(15, minX);
+          ty = Math.max(15, minY - 45);
+        }
+
+        toolbarPos = {
+          x: Math.max(10, Math.min(width - tbWidth - 70, tx)),
+          y: Math.max(10, Math.min(height - 50, ty)),
+        };
+      } else {
+        const tbWidth = 220;
+        let ty = minY - 45;
+        if (ty < 35) {
+          ty = maxY + 15;
+        }
+        let tx = (minX + maxX) / 2 - tbWidth / 2;
+        toolbarPos = {
+          x: Math.max(10, Math.min(width - tbWidth - 70, tx)),
+          y: Math.max(10, Math.min(height - 50, ty)),
+        };
+      }
     }
   }
 
@@ -1201,34 +1735,42 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             alignItems: 'center',
             gap: '6px',
             background: 'rgba(15, 23, 42, 0.95)',
-            backdropFilter: 'blur(10px)',
+            backdropFilter: 'blur(14px)',
             padding: '4px 8px',
             borderRadius: '8px',
             border: '1px solid rgba(255, 255, 255, 0.15)',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
             pointerEvents: 'auto',
           }}
         >
-          {/* Color palette */}
-          {['#3B82F6', '#00C46E', '#F43F5E', '#F59E0B', '#A78BFA', '#FFFFFF'].map((c) => (
-            <div
-              key={c}
-              onClick={() => updateDrawing(selectedDrawing.id, { style: { ...selectedDrawing.style, color: c } })}
-              style={{
-                width: '14px',
-                height: '14px',
-                borderRadius: '50%',
-                background: c,
-                cursor: 'pointer',
-                border: selectedDrawing.style.color === c ? '2px solid white' : '1px solid rgba(0,0,0,0.3)',
-                transform: selectedDrawing.style.color === c ? 'scale(1.2)' : 'scale(1)',
-                transition: 'transform 0.1s ease',
-              }}
-              title={`Couleur ${c}`}
-            />
-          ))}
+          {isRR ? (
+            <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', paddingRight: '4px', letterSpacing: '0.03em' }}>
+              {selectedDrawing.type === 'pos_long' ? '📈 ACHAT' : '📉 VENTE'}
+            </span>
+          ) : (
+            <>
+              {/* Color palette */}
+              {['#3B82F6', '#00C46E', '#F43F5E', '#F59E0B', '#A78BFA', '#FFFFFF'].map((c) => (
+                <div
+                  key={c}
+                  onClick={() => updateDrawing(selectedDrawing.id, { style: { ...selectedDrawing.style, color: c } })}
+                  style={{
+                    width: '14px',
+                    height: '14px',
+                    borderRadius: '50%',
+                    background: c,
+                    cursor: 'pointer',
+                    border: selectedDrawing.style.color === c ? '2px solid white' : '1px solid rgba(0,0,0,0.3)',
+                    transform: selectedDrawing.style.color === c ? 'scale(1.2)' : 'scale(1)',
+                    transition: 'transform 0.1s ease',
+                  }}
+                  title={`Couleur ${c}`}
+                />
+              ))}
 
-          <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.15)', margin: '0 2px' }} />
+              <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.15)', margin: '0 2px' }} />
+            </>
+          )}
 
           {/* Duplicate button */}
           <button
