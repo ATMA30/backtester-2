@@ -1,5 +1,39 @@
 import { create } from 'zustand';
 import { Candle, MarketPair, TimeframeDef, ActiveIndicator, ForexSessionConfig, SeparatorTF } from '../types/market';
+import { useReplayStore } from './useReplayStore';
+import { saveDataset } from '../services/db';
+
+const SESSION_SETTINGS_KEY = 'tv_pro_session_settings';
+
+export interface SessionSettings {
+  currentSymbol: string;
+  activeTF: number;
+  chartType: 'Candlestick' | 'Bar' | 'Line' | 'Area';
+  showVolume: boolean;
+  showGrid: boolean;
+  soundEnabled: boolean;
+  separatorTF: SeparatorTF;
+  forexSessions: ForexSessionConfig;
+  historyRange: string;
+  activeIndicators: ActiveIndicator[];
+}
+
+export function loadSessionSettings(): SessionSettings | null {
+  try {
+    const raw = localStorage.getItem(SESSION_SETTINGS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSessionSettings(settings: SessionSettings) {
+  try {
+    localStorage.setItem(SESSION_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Best-effort persistence (e.g. localStorage full or disabled) — safe to ignore.
+  }
+}
 
 export const TIMEFRAME_DEFS: TimeframeDef[] = [
   { s: 60, label: '1m', tfType: 'm' },
@@ -199,7 +233,15 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   setSymbol: (symbol) => set({ currentSymbol: symbol }),
   setTimeframe: (activeTF) => {
     const { baseCandles, baseTF } = get();
-    const aggregated = aggregateCandles(baseCandles, activeTF, baseTF);
+    const replayState = useReplayStore.getState();
+
+    let sourceCandles = baseCandles;
+    if (replayState.isActive && baseCandles.length > 0) {
+      const curIdx = Math.min(baseCandles.length - 1, Math.max(0, replayState.currentIndex));
+      sourceCandles = baseCandles.slice(0, curIdx + 1);
+    }
+
+    const aggregated = aggregateCandles(sourceCandles, activeTF, baseTF);
     set({
       activeTF,
       displayCandles: aggregated,
@@ -215,6 +257,21 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       sortedTimes,
       baseTF,
       activeTF: baseTF,
+    });
+
+    // A new dataset invalidates any in-progress replay pointing at the old candle array.
+    useReplayStore.getState().resetReplay();
+
+    const symbol = get().currentSymbol;
+    const { historyRange } = get();
+    saveDataset({
+      symbol,
+      name: symbol,
+      candlesCount: baseCandles.length,
+      baseTF,
+      createdAt: Date.now(),
+      timeRange: historyRange,
+      data: baseCandles,
     });
   },
   setDisplayCandles: (displayCandles) => {
@@ -256,3 +313,19 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   removeIndicator: (id) =>
     set((state) => ({ activeIndicators: state.activeIndicators.filter((i) => i.id !== id) })),
 }));
+
+useMarketStore.subscribe((state) => {
+  persistSessionSettings({
+    currentSymbol: state.currentSymbol,
+    activeTF: state.activeTF,
+    chartType: state.chartType,
+    showVolume: state.showVolume,
+    showGrid: state.showGrid,
+    soundEnabled: state.soundEnabled,
+    separatorTF: state.separatorTF,
+    forexSessions: state.forexSessions,
+    historyRange: state.historyRange,
+    // `series` holds a lightweight-charts handle kept only in TradingChart's local ref map — never persist it.
+    activeIndicators: state.activeIndicators.map(({ series: _series, ...rest }) => rest),
+  });
+});

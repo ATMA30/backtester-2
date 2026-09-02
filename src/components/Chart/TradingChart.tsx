@@ -16,20 +16,28 @@ export const TradingChart: React.FC = () => {
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [isLoading, setIsLoading] = useState(false);
 
+  const lastVisibleRangeRef = useRef<{ from: number; to: number } | null>(null);
+  const prevTFRef = useRef<number | null>(null);
+  const prevSymbolRef = useRef<string | null>(null);
+  const prevReplayActiveRef = useRef<boolean>(false);
+  const lastReplayJumpIdxRef = useRef<number | null>(null);
+
   const {
     displayCandles,
     baseCandles,
+    activeTF,
     chartType,
     showVolume,
     showGrid,
     activeIndicators,
     currentFitContentTrigger,
+    currentSymbol,
     setBaseCandles,
     setSymbol,
   } = useMarketStore();
 
-  const { isPicking, isActive: isReplayActive, setStartIndex, setCurrentIndex, setIsActive, setIsPicking } = useReplayStore();
-  const { openModal, showToast } = useUIStore();
+  const { isPicking, isActive: isReplayActive, currentIndex, setStartIndex, setCurrentIndex, setIsActive, setIsPicking } = useReplayStore();
+  const { openModal, showToast, activeModal, setSnapshotDataUrl } = useUIStore();
 
   // ── INIT CHART ────────────────────────────────────────────
   useEffect(() => {
@@ -37,10 +45,10 @@ export const TradingChart: React.FC = () => {
 
     const newChart = createChart(chartWrapperRef.current, {
       layout: {
-        background: { color: '#060810' },
-        textColor: '#6B7A99',
+        background: { color: '#0B0E14' },
+        textColor: '#8492A6',
         fontSize: 11,
-        fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+        fontFamily: "'JetBrains Mono', 'Inter', system-ui, sans-serif",
       },
       grid: {
         vertLines: { color: showGrid ? 'rgba(255, 255, 255, 0.035)' : 'transparent' },
@@ -55,10 +63,13 @@ export const TradingChart: React.FC = () => {
         borderColor: 'rgba(255, 255, 255, 0.08)',
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 12,
+        barSpacing: 8,
       },
       rightPriceScale: {
         borderColor: 'rgba(255, 255, 255, 0.08)',
         scaleMargins: { top: 0.06, bottom: 0.14 },
+        autoScale: true,
       },
     });
 
@@ -73,6 +84,13 @@ export const TradingChart: React.FC = () => {
 
     setChart(newChart);
     setVolumeSeries(vSeries);
+
+    const handleTimeRangeChange = (range: any) => {
+      if (range && typeof range.from === 'number' && typeof range.to === 'number') {
+        lastVisibleRangeRef.current = { from: range.from, to: range.to };
+      }
+    };
+    newChart.timeScale().subscribeVisibleTimeRangeChange(handleTimeRangeChange);
 
     const handleResize = () => {
       if (chartWrapperRef.current) {
@@ -101,17 +119,17 @@ export const TradingChart: React.FC = () => {
     let newMain: ISeriesApi<'Candlestick' | 'Bar' | 'Line' | 'Area'>;
     if (chartType === 'Candlestick') {
       newMain = chart.addCandlestickSeries({
-        upColor: '#00D26A',
-        downColor: '#FF3B5C',
-        borderUpColor: '#00D26A',
-        borderDownColor: '#FF3B5C',
-        wickUpColor: '#00D26A',
-        wickDownColor: '#FF3B5C',
+        upColor: '#00C46E',
+        downColor: '#F43F5E',
+        borderUpColor: '#00C46E',
+        borderDownColor: '#F43F5E',
+        wickUpColor: '#00C46E',
+        wickDownColor: '#F43F5E',
       });
     } else if (chartType === 'Bar') {
       newMain = chart.addBarSeries({
-        upColor: '#00D26A',
-        downColor: '#FF3B5C',
+        upColor: '#00C46E',
+        downColor: '#F43F5E',
       });
     } else if (chartType === 'Line') {
       newMain = chart.addLineSeries({
@@ -130,10 +148,26 @@ export const TradingChart: React.FC = () => {
     setMainSeries(newMain);
   }, [chart, chartType]);
 
-  // ── SET DATA ──────────────────────────────────────────────
+  // ── SET DATA & INTELLIGENT VIEWPORT MANAGEMENT ────────────
   useEffect(() => {
     if (!mainSeries || !displayCandles.length) return;
 
+    const isTFChange = prevTFRef.current !== null && prevTFRef.current !== activeTF;
+    const isSymbolChange = prevSymbolRef.current !== null && prevSymbolRef.current !== currentSymbol;
+    const isReplayJustStarted = !prevReplayActiveRef.current && isReplayActive;
+    const isReplayJump =
+      isReplayActive &&
+      lastReplayJumpIdxRef.current !== null &&
+      Math.abs(currentIndex - lastReplayJumpIdxRef.current) > 3;
+
+    prevTFRef.current = activeTF;
+    prevSymbolRef.current = currentSymbol;
+    prevReplayActiveRef.current = isReplayActive;
+    lastReplayJumpIdxRef.current = currentIndex;
+
+    const savedRange = lastVisibleRangeRef.current;
+
+    // Apply data
     if (chartType === 'Line' || chartType === 'Area') {
       mainSeries.setData(
         displayCandles.map((c) => ({ time: c.time as any, value: c.close }))
@@ -157,7 +191,7 @@ export const TradingChart: React.FC = () => {
           displayCandles.map((c) => ({
             time: c.time as any,
             value: c.volume,
-            color: c.close >= c.open ? 'rgba(0,210,106,0.30)' : 'rgba(255,59,92,0.30)',
+            color: c.close >= c.open ? 'rgba(0, 196, 110, 0.22)' : 'rgba(244, 63, 94, 0.22)',
           }))
         );
       }
@@ -165,34 +199,145 @@ export const TradingChart: React.FC = () => {
 
     // Render Indicators
     if (chart) {
-      // Remove stale indicators
+      // 1. Remove deleted indicator series
       indicatorSeriesMap.forEach((s, id) => {
         if (!activeIndicators.some((i) => i.id === id)) {
-          chart.removeSeries(s);
+          try {
+            chart.removeSeries(s);
+          } catch (e) {}
           indicatorSeriesMap.delete(id);
         }
       });
 
-      // Add / Update indicators
+      const hasSubPanes = activeIndicators.some((i) => i.type === 'RSI' || i.type === 'MACD');
+      try {
+        chart.priceScale('right').applyOptions({
+          scaleMargins: { top: 0.04, bottom: hasSubPanes ? 0.36 : 0.18 },
+        });
+        chart.priceScale('volume').applyOptions({
+          scaleMargins: { top: hasSubPanes ? 0.67 : 0.82, bottom: hasSubPanes ? 0.18 : 0.02 },
+        });
+      } catch (e) {}
+
+      // 2. Add or update indicators
       activeIndicators.forEach((ind) => {
-        let s = indicatorSeriesMap.get(ind.id);
-        if (!s) {
-          s = chart.addLineSeries({ color: ind.color, lineWidth: 2 });
-          indicatorSeriesMap.set(ind.id, s);
+        try {
+          let s = indicatorSeriesMap.get(ind.id);
+          const isRSI = ind.type === 'RSI';
+          const isMACD = ind.type === 'MACD';
+          const scaleId = isRSI ? 'rsi_pane' : isMACD ? 'macd_pane' : 'right';
+
+          if (!s) {
+            s = chart.addLineSeries({
+              color: ind.color || (isRSI ? '#A78BFA' : isMACD ? '#3B82F6' : '#10B981'),
+              lineWidth: 2,
+              priceScaleId: scaleId,
+            });
+            indicatorSeriesMap.set(ind.id, s);
+
+            if (scaleId !== 'right') {
+              try {
+                chart.priceScale(scaleId).applyOptions({
+                  scaleMargins: { top: 0.83, bottom: 0.02 },
+                  autoScale: true,
+                });
+              } catch (scaleErr) {
+                console.warn('Scale init error:', scaleErr);
+              }
+            }
+          }
+
+          if (!displayCandles || displayCandles.length === 0) return;
+
+          const p = ind.period || (isRSI ? 14 : isMACD ? 12 : 20);
+          const indData: any[] = [];
+
+          if (isRSI) {
+            if (displayCandles.length > p) {
+              let gains = 0, losses = 0;
+              for (let i = 1; i <= p; i++) {
+                const diff = displayCandles[i].close - displayCandles[i - 1].close;
+                if (diff >= 0) gains += diff;
+                else losses -= diff;
+              }
+              let avgGain = gains / p;
+              let avgLoss = losses / p;
+              let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+              indData.push({ time: displayCandles[p].time, value: 100 - (100 / (1 + rs)) });
+
+              for (let i = p + 1; i < displayCandles.length; i++) {
+                const diff = displayCandles[i].close - displayCandles[i - 1].close;
+                const gain = diff > 0 ? diff : 0;
+                const loss = diff < 0 ? -diff : 0;
+                avgGain = (avgGain * (p - 1) + gain) / p;
+                avgLoss = (avgLoss * (p - 1) + loss) / p;
+                rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+                indData.push({ time: displayCandles[i].time, value: 100 - (100 / (1 + rs)) });
+              }
+            }
+          } else if (isMACD) {
+            if (displayCandles.length >= 26) {
+              const k12 = 2 / 13, k26 = 2 / 27;
+              let ema12 = displayCandles[0].close, ema26 = displayCandles[0].close;
+              for (let i = 1; i < displayCandles.length; i++) {
+                ema12 = displayCandles[i].close * k12 + ema12 * (1 - k12);
+                ema26 = displayCandles[i].close * k26 + ema26 * (1 - k26);
+                if (i >= 26) {
+                  indData.push({ time: displayCandles[i].time, value: ema12 - ema26 });
+                }
+              }
+            }
+          } else if (ind.type === 'EMA') {
+            if (displayCandles.length >= p) {
+              const k = 2 / (p + 1);
+              let ema = displayCandles[0].close;
+              for (let i = 0; i < displayCandles.length; i++) {
+                ema = displayCandles[i].close * k + ema * (1 - k);
+                if (i >= p - 1) {
+                  indData.push({ time: displayCandles[i].time, value: ema });
+                }
+              }
+            }
+          } else {
+            // SMA
+            if (displayCandles.length >= p) {
+              for (let i = p - 1; i < displayCandles.length; i++) {
+                let sum = 0;
+                for (let k = i - p + 1; k <= i; k++) sum += displayCandles[k].close;
+                indData.push({ time: displayCandles[i].time, value: sum / p });
+              }
+            }
+          }
+
+          s.setData(indData);
+        } catch (err) {
+          console.warn(`Error updating indicator ${ind.type}:`, err);
         }
-        // Calculate SMA / EMA
-        const p = ind.period || 20;
-        const indData: any[] = [];
-        for (let i = p - 1; i < displayCandles.length; i++) {
-          let sum = 0;
-          for (let k = i - p + 1; k <= i; k++) sum += displayCandles[k].close;
-          indData.push({ time: displayCandles[i].time, value: sum / p });
-        }
-        s.setData(indData);
       });
       setIndicatorSeriesMap(new Map(indicatorSeriesMap));
+
+      // Viewport Control
+      if (isReplayJustStarted || isReplayJump) {
+        // Focus directly on the latest replay candles with space to the right
+        const count = displayCandles.length;
+        chart.timeScale().setVisibleLogicalRange({
+          from: Math.max(0, count - 75),
+          to: count + 12,
+        });
+      } else if (isTFChange && savedRange && savedRange.from && savedRange.to) {
+        // Preserve viewport across TF switches
+        try {
+          chart.timeScale().setVisibleRange({
+            from: savedRange.from as any,
+            to: savedRange.to as any,
+          });
+        } catch (e) {}
+      } else if (isSymbolChange || !savedRange) {
+        lastVisibleRangeRef.current = null;
+        chart.timeScale().fitContent();
+      }
     }
-  }, [mainSeries, volumeSeries, displayCandles, chartType, showVolume, chart, activeIndicators]);
+  }, [mainSeries, volumeSeries, displayCandles, chartType, showVolume, chart, activeIndicators, activeTF, currentSymbol, isReplayActive, currentIndex]);
 
   // ── FIT CONTENT TRIGGER ───────────────────────────────────
   useEffect(() => {
@@ -200,6 +345,40 @@ export const TradingChart: React.FC = () => {
       chart.timeScale().fitContent();
     }
   }, [currentFitContentTrigger, chart]);
+
+  // ── SNAPSHOT CAPTURE ──────────────────────────────────────
+  useEffect(() => {
+    if (activeModal === 'snapshot' && chart) {
+      try {
+        const chartCanvas = chart.takeScreenshot();
+        const drawCanvas = document.getElementById('draw-canvas') as HTMLCanvasElement | null;
+
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = chartCanvas.width;
+        outCanvas.height = chartCanvas.height;
+        const ctx = outCanvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(chartCanvas, 0, 0);
+          if (drawCanvas) {
+            ctx.drawImage(drawCanvas, 0, 0, outCanvas.width, outCanvas.height);
+          }
+          const dpr = window.devicePixelRatio || 1;
+          ctx.fillStyle = 'rgba(11, 14, 20, 0.85)';
+          ctx.fillRect(16 * dpr, (outCanvas.height / dpr - 40) * dpr, 340 * dpr, 28 * dpr);
+          ctx.fillStyle = '#00C46E';
+          ctx.font = `bold ${12 * dpr}px Inter, sans-serif`;
+          ctx.fillText(`TradeView Pro`, 24 * dpr, (outCanvas.height / dpr - 22) * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `${11 * dpr}px JetBrains Mono, monospace`;
+          ctx.fillText(` • ${currentSymbol} • ${new Date().toLocaleDateString('fr-FR')}`, 115 * dpr, (outCanvas.height / dpr - 22) * dpr);
+
+          setSnapshotDataUrl(outCanvas.toDataURL('image/png'));
+        }
+      } catch (e) {
+        console.warn('Snapshot capture failed:', e);
+      }
+    }
+  }, [activeModal, chart, currentSymbol, setSnapshotDataUrl]);
 
   // ── REPLAY PICK HANDLER ───────────────────────────────────
   const handleChartClick = (e: React.MouseEvent) => {

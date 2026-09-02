@@ -7,7 +7,7 @@ export const ShortcutsModal: React.FC = () => {
   if (activeModal !== 'shortcuts') return null;
 
   return (
-    <div id="shortcuts-overlay" style={{ display: 'flex' }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+    <div id="shortcuts-overlay" className="open" style={{ display: 'flex', opacity: 1 }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
       <div className="shortcuts-box">
         <div className="shortcuts-title">
           Raccourcis clavier

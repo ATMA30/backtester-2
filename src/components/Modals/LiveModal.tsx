@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useUIStore } from '../../store/useUIStore';
-import { useMarketStore, ALL_MARKET_PAIRS } from '../../store/useMarketStore';
+import { useMarketStore, ALL_MARKET_PAIRS, detectBaseTF } from '../../store/useMarketStore';
 import { fetchHistoricalData } from '../../services/historicalApi';
 import { fetchDerivMultiYear } from '../../services/derivWs';
 import { MarketPair } from '../../types/market';
@@ -15,10 +15,12 @@ export const LiveModal: React.FC = () => {
     setBaseCandles,
     setHistoryRange,
     setLiveConnected,
+    setTimeframe,
   } = useMarketStore();
 
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tous');
+  const [isLoading, setIsLoading] = useState(false);
 
   if (activeModal !== 'live') return null;
 
@@ -50,17 +52,25 @@ export const LiveModal: React.FC = () => {
   });
 
   const handleSelectPair = async (pair: MarketPair) => {
-    showToast(`Chargement de ${pair.symbol} (${historyRange})...`, 'info', 3000);
+    setIsLoading(true);
+    showToast(`Chargement de ${pair.symbol} (${historyRange})...`, 'info', 2500);
 
     let candles: any = null;
 
-    // 1. Try Historical API (BCE 27y / Yahoo 10y)
+    // 1. Try with user's desired interval
     try {
       const interval = activeTF <= 3600 ? '1h' : '1d';
       candles = await fetchHistoricalData(pair.symbol, interval, historyRange);
     } catch (e) {}
 
-    // 2. Try Deriv WebSocket for Synthetics or if empty
+    // 2. If null, fallback to 1d daily data
+    if (!candles || !candles.length) {
+      try {
+        candles = await fetchHistoricalData(pair.symbol, '1d', historyRange);
+      } catch (e) {}
+    }
+
+    // 3. If still null and has derivSymbol, try Deriv WebSocket
     if ((!candles || !candles.length) && pair.derivSymbol) {
       try {
         const gran = activeTF <= 60 ? 60 : activeTF <= 3600 ? 3600 : 86400;
@@ -68,24 +78,30 @@ export const LiveModal: React.FC = () => {
       } catch (e) {}
     }
 
+    setIsLoading(false);
+
     if (candles && candles.length > 0) {
+      const detectedTF = detectBaseTF(candles);
       setSymbol(pair.symbol);
-      setBaseCandles(candles);
+      setBaseCandles(candles, detectedTF);
       setLiveConnected(true);
+      if (activeTF < detectedTF) {
+        setTimeframe(detectedTF);
+      }
       closeModal();
-      showToast(`🟢 ${pair.symbol} : ${candles.length.toLocaleString()} bougies réelles chargées !`, 'success', 3000);
+      showToast(`🟢 ${pair.symbol} : ${candles.length.toLocaleString()} bougies chargées (${historyRange})`, 'success', 3500);
     } else {
-      showToast(`Erreur de connexion pour ${pair.symbol}`, 'error');
+      showToast(`Impossible de charger ${pair.symbol}. Réessayez avec une autre période.`, 'error', 3000);
     }
   };
 
   return (
-    <div id="live-modal" className="custom-modal" style={{ display: 'flex' }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
-      <div className="custom-modal-box" style={{ maxWidth: '640px' }}>
+    <div id="live-modal" className="custom-modal open" style={{ display: 'flex', opacity: 1 }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+      <div className="custom-modal-box" style={{ maxWidth: '680px' }}>
         <div className="custom-modal-header">
           <div className="custom-modal-title">
             <span className="live-dot-indicator online" style={{ position: 'static', display: 'inline-block', marginRight: '6px' }} />
-            Paires Forex &amp; Marchés en Direct (Replay &amp; Live)
+            Paires Forex &amp; Marchés en Direct (27 Ans d'historique)
           </div>
           <button className="custom-modal-close" onClick={closeModal}>✕</button>
         </div>
@@ -151,20 +167,21 @@ export const LiveModal: React.FC = () => {
           </div>
 
           {/* List */}
-          <div style={{ maxHeight: '45vh', overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px' }}>
+          <div style={{ maxHeight: '48vh', overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '8px' }}>
             {filteredPairs.map((p) => {
               const isSelected = p.symbol === currentSymbol;
               return (
                 <div
                   key={p.symbol}
                   className={`pair-card ${isSelected ? 'selected' : ''}`}
-                  onClick={() => handleSelectPair(p)}
+                  onClick={() => !isLoading && handleSelectPair(p)}
                   style={{
                     background: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'var(--bg-elevated)',
                     border: isSelected ? '1px solid var(--accent)' : '1px solid var(--border)',
                     borderRadius: 'var(--radius-sm)',
                     padding: '8px 10px',
-                    cursor: 'pointer',
+                    cursor: isLoading ? 'wait' : 'pointer',
+                    opacity: isLoading ? 0.6 : 1,
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>

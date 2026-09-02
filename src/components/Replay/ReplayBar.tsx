@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useReplayStore } from '../../store/useReplayStore';
-import { useMarketStore } from '../../store/useMarketStore';
+import { useMarketStore, aggregateCandles } from '../../store/useMarketStore';
 import { useTradeStore } from '../../store/useTradeStore';
 import { useUIStore } from '../../store/useUIStore';
 
@@ -20,7 +20,7 @@ export const ReplayBar: React.FC = () => {
     stepBackward,
   } = useReplayStore();
 
-  const { baseCandles, displayCandles, setDisplayCandles, currentSymbol } = useMarketStore();
+  const { baseCandles, setDisplayCandles, currentSymbol, activeTF, baseTF } = useMarketStore();
   const {
     balance,
     activePosition,
@@ -35,11 +35,12 @@ export const ReplayBar: React.FC = () => {
     updatePrice,
   } = useTradeStore();
 
-  const { openModal } = useUIStore();
+  const { openModal, showToast } = useUIStore();
 
   const [entryInput, setEntryInput] = useState('');
   const [slInput, setSlInput] = useState('');
   const [tpInput, setTpInput] = useState('');
+  const [showAnchorMenu, setShowAnchorMenu] = useState(false);
 
   const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
 
@@ -62,12 +63,13 @@ export const ReplayBar: React.FC = () => {
     return () => clearInterval(interval);
   }, [isActive, isPlaying, currentIndex, speedMs, baseCandles, setCurrentIndex, setIsPlaying, updatePrice]);
 
-  // ── SLICE SYNC ────────────────────────────────────────────
+  // ── SLICE SYNC WITH TIMEFRAME AGGREGATION ─────────────────
   useEffect(() => {
     if (!isActive || !baseCandles.length) return;
     const sliced = baseCandles.slice(0, currentIndex + 1);
-    setDisplayCandles(sliced);
-  }, [isActive, currentIndex, baseCandles, setDisplayCandles]);
+    const aggregated = aggregateCandles(sliced, activeTF, baseTF);
+    setDisplayCandles(aggregated);
+  }, [isActive, currentIndex, baseCandles, activeTF, baseTF, setDisplayCandles]);
 
   if (!isActive) return null;
 
@@ -80,6 +82,8 @@ export const ReplayBar: React.FC = () => {
         day: 'numeric',
         month: 'short',
         year: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
       })
     : '—';
 
@@ -92,7 +96,7 @@ export const ReplayBar: React.FC = () => {
     : '—';
 
   // Calculate live PnL & RR
-  let currentPnL = 0;
+  let currentPnL;
   let pnlStr = '--';
   let pnlCls = '';
   if (activePosition && currentPrice) {
@@ -101,7 +105,7 @@ export const ReplayBar: React.FC = () => {
         ? (currentPrice - activePosition.entry) * activePosition.size
         : (activePosition.entry - currentPrice) * activePosition.size;
     pnlStr = (currentPnL >= 0 ? '+$' : '-$') + Math.abs(currentPnL).toFixed(2);
-    pnlCls = currentPnL >= 0 ? 'pnl-pos' : 'pnl-neg';
+    pnlCls = currentPnL >= 0 ? 'profit' : 'loss';
   }
 
   // Calculate RR Ratio
@@ -122,24 +126,76 @@ export const ReplayBar: React.FC = () => {
     setStartIndex(randIdx);
     setCurrentIndex(randIdx);
     setIsPlaying(false);
+    setShowAnchorMenu(false);
+    showToast('🎲 Départ aléatoire blind test lancé !', 'info');
+  };
+
+  const startAtSession = (hour: number, name: string) => {
+    if (baseCandles.length < 50) return;
+    for (let i = baseCandles.length - 100; i >= 10; i--) {
+      const d = new Date(baseCandles[i].time * 1000);
+      if (d.getUTCHours() === hour) {
+        setStartIndex(i);
+        setCurrentIndex(i);
+        setIsPlaying(false);
+        setShowAnchorMenu(false);
+        showToast(`🎯 Départ calé sur la session ${name}`, 'success');
+        return;
+      }
+    }
+    startRandom();
+  };
+
+  const promptDate = () => {
+    if (!baseCandles.length) return;
+    const minD = new Date(baseCandles[0].time * 1000).toISOString().slice(0, 10);
+    const maxD = new Date(baseCandles[baseCandles.length - 1].time * 1000).toISOString().slice(0, 10);
+    const userInput = prompt(`Date de départ (${minD} → ${maxD}) — format AAAA-MM-JJ :`, minD);
+    if (!userInput) return;
+    const target = new Date(userInput).getTime() / 1000;
+    const idx = baseCandles.findIndex((c) => c.time >= target);
+    if (idx !== -1) {
+      setStartIndex(idx);
+      setCurrentIndex(idx);
+      setIsPlaying(false);
+      setShowAnchorMenu(false);
+      showToast(`🎯 Replay ancré au ${userInput}`, 'success');
+    }
   };
 
   const handleBuy = () => {
     if (!currentPrice || !currentCandle) return;
-    const sl = slInput ? parseFloat(slInput) : currentPrice - 20 * pip;
-    const tp = tpInput ? parseFloat(tpInput) : currentPrice + 40 * pip;
-    openTrade('LONG', currentPrice, sl, tp, currentCandle.time);
+    const entryParsed = entryInput ? parseFloat(entryInput.replace(',', '.')) : NaN;
+    const entry = !isNaN(entryParsed) && entryParsed > 0 ? entryParsed : currentPrice;
+
+    const slParsed = slInput ? parseFloat(slInput.replace(',', '.')) : NaN;
+    const sl = !isNaN(slParsed) && slParsed > 0 ? slParsed : entry - 20 * pip;
+
+    const tpParsed = tpInput ? parseFloat(tpInput.replace(',', '.')) : NaN;
+    const tp = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : entry + 40 * pip;
+
+    openTrade('LONG', entry, sl, tp, currentCandle.time);
+    showToast(`🟢 Position ACHAT ouverte @ ${entry.toFixed(5)}`, 'success', 2500);
   };
 
   const handleSell = () => {
     if (!currentPrice || !currentCandle) return;
-    const sl = slInput ? parseFloat(slInput) : currentPrice + 20 * pip;
-    const tp = tpInput ? parseFloat(tpInput) : currentPrice - 40 * pip;
-    openTrade('SHORT', currentPrice, sl, tp, currentCandle.time);
+    const entryParsed = entryInput ? parseFloat(entryInput.replace(',', '.')) : NaN;
+    const entry = !isNaN(entryParsed) && entryParsed > 0 ? entryParsed : currentPrice;
+
+    const slParsed = slInput ? parseFloat(slInput.replace(',', '.')) : NaN;
+    const sl = !isNaN(slParsed) && slParsed > 0 ? slParsed : entry + 20 * pip;
+
+    const tpParsed = tpInput ? parseFloat(tpInput.replace(',', '.')) : NaN;
+    const tp = !isNaN(tpParsed) && tpParsed > 0 ? tpParsed : entry - 40 * pip;
+
+    openTrade('SHORT', entry, sl, tp, currentCandle.time);
+    showToast(`🔴 Position VENTE ouverte @ ${entry.toFixed(5)}`, 'success', 2500);
   };
 
   return (
-    <div id="replay-bar" className="active">
+    <div id="replay-bar" style={{ display: 'flex' }}>
+      {/* ── BLOCK 1: REPLAY TIMELINE & ANCHOR ── */}
       <div className="rp-left">
         <button
           id="rp-exit"
@@ -153,15 +209,30 @@ export const ReplayBar: React.FC = () => {
           ✕ Quitter
         </button>
 
-        <button id="rp-random" onClick={startRandom} title="Départ aléatoire">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="16 3 21 3 21 8" />
-            <line x1="4" y1="20" x2="21" y2="3" />
-            <polyline points="21 16 21 21 16 21" />
-            <line x1="15" y1="15" x2="21" y2="21" />
-          </svg>
-          Aléatoire
-        </button>
+        {/* Anchor strategy dropdown */}
+        <div className="tv-dropdown" style={{ position: 'relative' }}>
+          <button
+            className="rp-strategy-btn"
+            onClick={() => setShowAnchorMenu(!showAnchorMenu)}
+            title="Point d'ancrage & Stratégie"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" />
+            </svg>
+            Ancrage ▾
+          </button>
+          {showAnchorMenu && (
+            <div className="tv-dropdown-menu show" style={{ bottom: 'calc(100% + 8px)', top: 'auto', minWidth: '210px', display: 'block' }}>
+              <div className="dropdown-section-label">Point de départ</div>
+              <div className="tv-dropdown-item" onClick={startRandom}>🎲 Session Aléatoire (Blind Test)</div>
+              <div className="tv-dropdown-item" onClick={() => startAtSession(8, 'Londres (08h UTC)')}>🇬🇧 Session Londres (08h UTC)</div>
+              <div className="tv-dropdown-item" onClick={() => startAtSession(13, 'New York (13h UTC)')}>🇺🇸 Session New York (13h UTC)</div>
+              <div className="tv-dropdown-item" onClick={() => startAtSession(0, 'Tokyo (00h UTC)')}>🇯🇵 Session Tokyo (00h UTC)</div>
+              <div className="dropdown-divider" />
+              <div className="tv-dropdown-item" onClick={promptDate}>📅 Saisir une date précise…</div>
+            </div>
+          )}
+        </div>
 
         <div className="rp-controls">
           <button id="rp-step-back" title="Bougie précédente (←)" onClick={stepBackward}>
@@ -170,7 +241,7 @@ export const ReplayBar: React.FC = () => {
               <line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
-          <button id="rp-play" title="Lecture / Pause (Espace)" onClick={() => setIsPlaying(!isPlaying)}>
+          <button id="rp-play" className={isPlaying ? 'playing' : ''} title="Lecture / Pause (Espace)" onClick={() => setIsPlaying(!isPlaying)}>
             {isPlaying ? (
               <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="6" y="4" width="4" height="16" />
@@ -191,6 +262,7 @@ export const ReplayBar: React.FC = () => {
         </div>
       </div>
 
+      {/* ── BLOCK 2: SCRUBBER & SPEED (CENTER) ── */}
       <div className="rp-center">
         <div className="rp-scrubber-wrap">
           <span id="rp-time-cur" className="rp-time">{timeCurStr}</span>
@@ -226,7 +298,7 @@ export const ReplayBar: React.FC = () => {
         </div>
       </div>
 
-      {/* Trading simulator panel */}
+      {/* ── BLOCK 3: TRADING CONTROL & METRICS ── */}
       <div className="rp-trade-panel">
         <div className="rp-stat-group">
           <span className="rp-stat-label">Solde</span>
@@ -275,7 +347,7 @@ export const ReplayBar: React.FC = () => {
             <input
               type="text"
               id="trade-entry"
-              placeholder="Market"
+              placeholder="Marché"
               value={entryInput}
               onChange={(e) => setEntryInput(e.target.value)}
             />
@@ -304,10 +376,10 @@ export const ReplayBar: React.FC = () => {
 
         <div className="rp-actions">
           <button className="trade-btn buy" id="btn-buy" onClick={handleBuy}>
-            Buy
+            ▲ BUY
           </button>
           <button className="trade-btn sell" id="btn-sell" onClick={handleSell}>
-            Sell
+            ▼ SELL
           </button>
           <button
             className="trade-btn be"
@@ -315,7 +387,7 @@ export const ReplayBar: React.FC = () => {
             onClick={() => setBreakeven(currentPrice)}
             title="Passer le Stop Loss à Breakeven (0 Risque)"
           >
-            BE
+            🛡️ BE
           </button>
           <button
             className="trade-btn scale"

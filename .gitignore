@@ -3,3 +3,7 @@
 node_modules/
 dist/
 *.log
+.claude
+.market_cache
+.playwright-report
+.playwright-mcp

@@ -10,23 +10,68 @@ import { IndicatorConfigModal } from './components/Modals/IndicatorConfigModal';
 import { TradeHistoryModal } from './components/Modals/TradeHistoryModal';
 import { SnapshotModal } from './components/Modals/SnapshotModal';
 import { ShortcutsModal } from './components/Modals/ShortcutsModal';
-import { useMarketStore } from './store/useMarketStore';
+import { useMarketStore, loadSessionSettings } from './store/useMarketStore';
 import { useDrawingStore } from './store/useDrawingStore';
 import { useReplayStore } from './store/useReplayStore';
 import { useTradeStore } from './store/useTradeStore';
 import { useUIStore } from './store/useUIStore';
 import { fetchHistoricalData } from './services/historicalApi';
+import { getDataset } from './services/db';
 
 export const App: React.FC = () => {
-  const { setBaseCandles, setSymbol, displayCandles } = useMarketStore();
-  const { setActiveTool, removeDrawing, selectedDrawingId, undo, redo } = useDrawingStore();
+  const {
+    setBaseCandles,
+    setSymbol,
+    displayCandles,
+    currentSymbol,
+    setTimeframe,
+    setChartType,
+    setHistoryRange,
+    setSeparatorTF,
+    addIndicator,
+    toggleVolume,
+    toggleGrid,
+    toggleSound,
+    toggleForexSession,
+    toggleForexLocalTz,
+  } = useMarketStore();
+  const { setActiveTool, removeDrawing, selectedDrawingId, undo, redo, setActiveSymbol } = useDrawingStore();
   const { isActive: isReplayActive, isPlaying, setIsPlaying, stepForward, stepBackward, setIsActive } = useReplayStore();
   const { setBreakeven } = useTradeStore();
   const { openModal, closeModal, activeModal, toasts, showToast } = useUIStore();
 
-  // ── INITIAL DATA LOAD (EUR/USD 27 YEARS) ──────────────────
+  // ── SESSION RESTORE (resume where the user left off) ──────
   useEffect(() => {
-    async function loadInitial() {
+    async function restoreSession() {
+      const saved = loadSessionSettings();
+
+      if (saved) {
+        const dataset = await getDataset(saved.currentSymbol);
+        if (dataset && dataset.data && dataset.data.length > 0) {
+          setSymbol(dataset.symbol);
+          setBaseCandles(dataset.data, dataset.baseTF);
+          setTimeframe(saved.activeTF);
+          setChartType(saved.chartType);
+          setHistoryRange(saved.historyRange);
+          setSeparatorTF(saved.separatorTF);
+          if (saved.showVolume !== useMarketStore.getState().showVolume) toggleVolume();
+          if (saved.showGrid !== useMarketStore.getState().showGrid) toggleGrid();
+          if (saved.soundEnabled !== useMarketStore.getState().soundEnabled) toggleSound();
+          (['sydney', 'tokyo', 'london', 'newyork'] as const).forEach((session) => {
+            if (saved.forexSessions[session] !== useMarketStore.getState().forexSessions[session]) {
+              toggleForexSession(session);
+            }
+          });
+          if (saved.forexSessions.useLocalTz !== useMarketStore.getState().forexSessions.useLocalTz) {
+            toggleForexLocalTz();
+          }
+          saved.activeIndicators.forEach((ind) => addIndicator(ind));
+          showToast(`🟢 Session restaurée — ${dataset.symbol} (${dataset.data.length.toLocaleString()} bougies)`, 'success', 3500);
+          return;
+        }
+      }
+
+      // No usable saved session — fall back to the default EUR/USD dataset.
       try {
         const candles = await fetchHistoricalData('EURUSD', '1d', 'max');
         if (candles && candles.length > 0) {
@@ -38,8 +83,14 @@ export const App: React.FC = () => {
         console.warn('Initial data load error:', e);
       }
     }
-    loadInitial();
+    restoreSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── KEEP DRAWINGS SCOPED TO THE ACTIVE SYMBOL ─────────────
+  useEffect(() => {
+    setActiveSymbol(currentSymbol);
+  }, [currentSymbol, setActiveSymbol]);
 
   // ── GLOBAL KEYBOARD SHORTCUTS ─────────────────────────────
   useEffect(() => {
@@ -99,6 +150,20 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeModal, isReplayActive, isPlaying, selectedDrawingId, displayCandles, setActiveTool, removeDrawing, setIsPlaying, stepForward, stepBackward, setBreakeven, openModal, closeModal, setIsActive, undo, redo]);
+
+  // ── AUTO-CLOSE DROPDOWNS ON CLICK OUTSIDE ─────────────────
+  const { activeDropdown, closeAllDropdowns } = useUIStore();
+  useEffect(() => {
+    if (!activeDropdown) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && !target.closest('.tv-dropdown') && !target.closest('.tv-dropdown-menu')) {
+        closeAllDropdowns();
+      }
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, [activeDropdown, closeAllDropdowns]);
 
   return (
     <>

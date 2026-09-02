@@ -1212,6 +1212,7 @@ body.replay-active #tv-chart {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .col-map-item label {
@@ -1222,6 +1223,9 @@ body.replay-active #tv-chart {
 }
 
 .col-map-item select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-primary);
@@ -1231,6 +1235,9 @@ body.replay-active #tv-chart {
   font-family: var(--mono);
   cursor: pointer;
   outline: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -2713,17 +2720,17 @@ kbd {
    CUSTOM MODALS (Live, Datasets, Snapshot)
 ══════════════════════════════════════════════════════════════════ */
 .custom-modal {
-  display: none;
+  display: flex;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(0, 0, 0, 0.78);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   z-index: 9999;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .custom-modal.open {

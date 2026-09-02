@@ -2713,17 +2713,17 @@ kbd {
    CUSTOM MODALS (Live, Datasets, Snapshot)
 ══════════════════════════════════════════════════════════════════ */
 .custom-modal {
-  display: none;
+  display: flex;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(0, 0, 0, 0.78);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   z-index: 9999;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .custom-modal.open {
