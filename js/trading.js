@@ -178,41 +178,54 @@ function _drawTradeLines(p, title) {
 }
 
 function executeTrade(type) {
-  if (!replay.active || !mainSeries) return;
-  const currentData = baseCandles[replay.idx];
+  if (!mainSeries) return;
+  const currentData = replay.active ? baseCandles[replay.idx] : baseCandles[baseCandles.length - 1];
   if (!currentData) return;
 
-  const entryRaw = parseFloat(document.getElementById("trade-entry").value);
-  const slRaw = parseFloat(document.getElementById("trade-sl").value);
-  const tpRaw = parseFloat(document.getElementById("trade-tp").value);
+  const entryRaw = parseFloat(document.getElementById("trade-entry")?.value);
+  const slRaw = parseFloat(document.getElementById("trade-sl")?.value);
+  const tpRaw = parseFloat(document.getElementById("trade-tp")?.value);
 
   const sl = isNaN(slRaw) || slRaw <= 0 ? null : slRaw;
   const tp = isNaN(tpRaw) || tpRaw <= 0 ? null : tpRaw;
-  const entry = isNaN(entryRaw) || entryRaw <= 0 ? currentData.close : entryRaw;
+  let entry = isNaN(entryRaw) || entryRaw <= 0 ? currentData.close : entryRaw;
+
+  // Account for spread if defined
+  const spread = (tradeSim && tradeSim.spread) ? tradeSim.spread : 0;
+  if (spread > 0) {
+    entry = type === "LONG" ? entry + spread / 2 : entry - spread / 2;
+  }
 
   // Position sizing: % of capital
   const riskPct = parseFloat(document.getElementById("trade-risk-pct")?.value) || 2;
   const autoQty = (tradeSim.balance * riskPct / 100) / entry;
-  const qty = parseFloat(document.getElementById("trade-qty").value) || autoQty;
+  const qty = parseFloat(document.getElementById("trade-qty")?.value) || autoQty;
+
+  // Commission fee deduction
+  const commPct = (tradeSim && tradeSim.commissionPct) ? tradeSim.commissionPct : 0;
+  const commFee = (entry * qty) * (commPct / 100);
+  if (commFee > 0) {
+    tradeSim.balance -= commFee;
+  }
 
   // Validate SL/TP logic
   if (sl !== null) {
     if (type === "LONG" && sl >= entry) {
-      showToast("SL invalide — pour un LONG, le Stop Loss doit être sous le prix d'entrée.", "error");
+      showToast("SL invalide — pour un LONG, le Stop Loss doit être sous l'entrée.", "error");
       return;
     }
     if (type === "SHORT" && sl <= entry) {
-      showToast("SL invalide — pour un SHORT, le Stop Loss doit être au-dessus du prix d'entrée.", "error");
+      showToast("SL invalide — pour un SHORT, le Stop Loss doit être au-dessus de l'entrée.", "error");
       return;
     }
   }
   if (tp !== null) {
     if (type === "LONG" && tp <= entry) {
-      showToast("TP invalide — pour un LONG, le Take Profit doit être au-dessus du prix d'entrée.", "error");
+      showToast("TP invalide — pour un LONG, le Take Profit doit être au-dessus de l'entrée.", "error");
       return;
     }
     if (type === "SHORT" && tp >= entry) {
-      showToast("TP invalide — pour un SHORT, le Take Profit doit être sous le prix d'entrée.", "error");
+      showToast("TP invalide — pour un SHORT, le Take Profit doit être sous l'entrée.", "error");
       return;
     }
   }
@@ -221,25 +234,104 @@ function executeTrade(type) {
     id: _nextTradeId++, type, entry, sl, tp, qty,
     time: currentData.time,
     entryLine: null, slLine: null, tpLine: null,
+    trailingDist: null,
   };
 
-  if (entry === currentData.close) {
+  const isLimit = Math.abs(entry - currentData.close) > (spread > 0 ? spread : 0.0001);
+
+  if (!isLimit) {
     tradeSim.positions.push(trade);
     _drawTradeLines(trade, type);
     _updateAllTradeMarkers();
+    if (typeof playSound === "function") playSound("order");
   } else {
     tradeSim.pendingOrders.push(trade);
     _drawTradeLines(trade, type + " LIMIT");
+    if (typeof playSound === "function") playSound("order");
   }
 
-  document.getElementById("btn-buy").style.display = "block";
-  document.getElementById("btn-sell").style.display = "block";
-  document.getElementById("btn-close-pos").style.display = "block";
-  document.getElementById("btn-close-pos").textContent = "Fermer Tout";
+  const btnClose = document.getElementById("btn-close-pos");
+  if (btnClose) {
+    btnClose.style.display = "block";
+    btnClose.textContent = "Fermer Tout";
+  }
 
   updateSimUI(currentData.close);
-  const isLimit = entry !== currentData.close;
-  showToast(`${type} ${isLimit ? "LIMIT " : ""}@${fmt(entry)} ×${qty.toFixed(2)}`, "info", 2500);
+  showToast(`${type} ${isLimit ? "LIMIT " : ""}@${fmt(entry)} ×${qty.toFixed(2)}${commFee > 0 ? ` (Frais: -$${commFee.toFixed(2)})` : ""}`, "info", 2500);
+
+  if (typeof dbSaveSession === "function") dbSaveSession();
+}
+
+function setBreakeven(id = null) {
+  const targets = id === null ? tradeSim.positions : tradeSim.positions.filter(p => p.id === id);
+  if (!targets.length) {
+    showToast("Aucune position ouverte à passer en Breakeven", "info", 2000);
+    return;
+  }
+  targets.forEach(p => {
+    p.sl = p.entry;
+    if (!p.slLine) {
+      p.slLine = mainSeries.createPriceLine({ price: p.entry, color: "#F2364A", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "BE (SL)" });
+    } else {
+      p.slLine.applyOptions({ price: p.entry, title: "BE (SL)" });
+    }
+  });
+  if (typeof playSound === "function") playSound("order");
+  showToast("Stop Loss placé à Breakeven (0 Risque) 🛡️", "success", 2500);
+  if (typeof dbSaveSession === "function") dbSaveSession();
+}
+
+function closePartial(pct, id = null) {
+  const targets = id === null ? [...tradeSim.positions] : tradeSim.positions.filter(p => p.id === id);
+  if (!targets.length) {
+    showToast("Aucune position ouverte pour clôture partielle", "info", 2000);
+    return;
+  }
+
+  const currentData = replay.active ? baseCandles[replay.idx] : baseCandles[baseCandles.length - 1];
+  const closePrice = currentData ? currentData.close : targets[0].entry;
+
+  targets.forEach(pos => {
+    const closeQty = pos.qty * (pct / 100);
+    if (closeQty <= 0) return;
+
+    let pnl = 0;
+    if (pos.type === "LONG") pnl = (closePrice - pos.entry) * closeQty;
+    else pnl = (pos.entry - closePrice) * closeQty;
+
+    tradeSim.balance += pnl;
+    tradeSim.history.push({
+      ...pos,
+      qty: closeQty,
+      exit: closePrice,
+      pnl,
+      reason: `Clôture ${pct}%`,
+    });
+
+    pos.qty -= closeQty;
+
+    if (pos.qty <= 0.0001) {
+      // Fully closed
+      _removeLinesFrom(pos);
+      const idx = tradeSim.positions.findIndex(p => p.id === pos.id);
+      if (idx !== -1) tradeSim.positions.splice(idx, 1);
+    } else if (pos.entryLine) {
+      pos.entryLine.applyOptions({ title: `${pos.type} ×${pos.qty.toFixed(2)}` });
+    }
+  });
+
+  _updateAllTradeMarkers();
+  updateTradeHistoryPanel();
+  updateSimUI(closePrice);
+  if (typeof playSound === "function") playSound("tp");
+  showToast(`Clôture partielle de ${pct}% effectuée`, "success", 2500);
+
+  if (tradeSim.positions.length === 0 && tradeSim.pendingOrders.length === 0) {
+    const btnClose = document.getElementById("btn-close-pos");
+    if (btnClose) btnClose.style.display = "none";
+  }
+
+  if (typeof dbSaveSession === "function") dbSaveSession();
 }
 
 function cancelPending(id = null) {
@@ -253,6 +345,7 @@ function cancelPending(id = null) {
       tradeSim.pendingOrders.splice(idx, 1);
     }
   }
+  if (typeof dbSaveSession === "function") dbSaveSession();
 }
 
 function closePosition(reason, closePrice = null, id = null) {
@@ -266,7 +359,7 @@ function closePosition(reason, closePrice = null, id = null) {
   if (idx === -1) return;
   const pos = tradeSim.positions[idx];
   if (closePrice === null) {
-    const currentData = baseCandles[replay.idx];
+    const currentData = replay.active ? baseCandles[replay.idx] : baseCandles[baseCandles.length - 1];
     closePrice = currentData ? currentData.close : pos.entry;
   }
   let pnl = 0;
@@ -278,17 +371,29 @@ function closePosition(reason, closePrice = null, id = null) {
   tradeSim.positions.splice(idx, 1);
   _updateAllTradeMarkers();
   updateTradeHistoryPanel();
+
+  if (typeof playSound === "function") {
+    if (reason === "TP" || pnl > 0) playSound("tp");
+    else if (reason === "SL" || pnl < 0) playSound("sl");
+  }
+
   const pnlSign = pnl >= 0 ? "success" : "error";
   showToast(`Position fermée — ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} (${reason})`, pnlSign, 3500);
   if (tradeSim.positions.length === 0 && tradeSim.pendingOrders.length === 0) {
-    document.getElementById("btn-close-pos").style.display = "none";
-    document.getElementById("trade-sl").value = "";
-    document.getElementById("trade-tp").value = "";
+    const btnClose = document.getElementById("btn-close-pos");
+    if (btnClose) btnClose.style.display = "none";
+    const slInp = document.getElementById("trade-sl");
+    const tpInp = document.getElementById("trade-tp");
+    if (slInp) slInp.value = "";
+    if (tpInp) tpInp.value = "";
   }
   updateSimUI(closePrice);
   const pnlEl = document.getElementById("rp-pnl");
-  pnlEl.textContent = `P/L: ${pnl >= 0 ? "+" : ""}${formatMoney(pnl)}`;
-  pnlEl.className = "rp-pnl-val " + (pnl >= 0 ? "profit" : "loss");
+  if (pnlEl) {
+    pnlEl.textContent = `P/L: ${pnl >= 0 ? "+" : ""}${formatMoney(pnl)}`;
+    pnlEl.className = "rp-pnl-val " + (pnl >= 0 ? "profit" : "loss");
+  }
+  if (typeof dbSaveSession === "function") dbSaveSession();
 }
 
 function exportTradeHistory() {

@@ -3,12 +3,25 @@
 //  Loaded last: depends on all other modules
 // ========================================================
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
   loadPrefs();
   initChart();
   initDrawCanvas();
   setupPositionDrag();
   _initForexTzSelect(); // Sync UTC offset selector to browser timezone
+
+  // Try restoring previous dataset or session from IndexedDB
+  if (typeof dbListDatasets === "function") {
+    try {
+      const list = await dbListDatasets();
+      if (list && list.length > 0) {
+        // Load most recent dataset
+        await loadSavedDataset(list[0].id);
+      }
+    } catch (e) {
+      console.warn("IndexedDB restore error:", e);
+    }
+  }
 
   // Replay bar controls
   document.getElementById("rp-play").addEventListener("click", () => {
@@ -36,8 +49,9 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     }
     replay.idx = targetIdx;
-    const visible = baseCandles.slice(0, targetIdx + 1);
-    renderChart(visible, true);
+    if (typeof renderReplaySlice === "function") {
+      renderReplaySlice(targetIdx);
+    }
     rpUpdateUI();
   });
 
@@ -79,6 +93,18 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (e.key === "Escape") {
+    if (document.getElementById("live-modal")?.classList.contains("open")) {
+      closeLiveModal();
+      return;
+    }
+    if (document.getElementById("datasets-modal")?.classList.contains("open")) {
+      closeDatasetsModal();
+      return;
+    }
+    if (document.getElementById("snapshot-modal")?.classList.contains("open")) {
+      closeSnapshotModal();
+      return;
+    }
     if (document.getElementById("indicator-modal").classList.contains("open")) {
       closeIndicatorModal();
       return;
@@ -107,6 +133,10 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "f") {
     e.preventDefault();
     fitContent();
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === "p" || e.key === "P")) {
+    e.preventDefault();
+    captureChartSnapshot();
   }
   if ((e.ctrlKey || e.metaKey) && e.key === "z") {
     e.preventDefault();
@@ -146,7 +176,11 @@ document.addEventListener("keydown", (e) => {
       if (e.key === "6") setDrawTool("fib");
       if (e.key === "7") setDrawTool("text");
       if (e.key === "8") setDrawTool("channel");
+      if (e.key === "9") setDrawTool("pos_long");
+      if (e.key === "0") setDrawTool("pos_short");
       if (e.key === "r" || e.key === "R") setDrawTool("ray");
+      if (e.key === "b" || e.key === "B") setBreakeven();
+      if (e.key === "p" || e.key === "P") captureChartSnapshot();
       if (e.key === "?") document.getElementById("shortcuts-overlay").classList.add("open");
     }
   }

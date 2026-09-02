@@ -7,7 +7,7 @@ function initDrawCanvas() {
   const container = document.getElementById("chart-container");
   drawCanvas = document.createElement("canvas");
   drawCanvas.id = "draw-canvas";
-  drawCanvas.classList.add("cursor-mode");
+  drawCanvas.classList.add("active");
   container.appendChild(drawCanvas);
   drawCtx = drawCanvas.getContext("2d");
   resizeDrawCanvas();
@@ -16,9 +16,31 @@ function initDrawCanvas() {
   drawCanvas.addEventListener("mousedown", onDrawMouseDown);
   drawCanvas.addEventListener("mousemove", onDrawMouseMove);
   drawCanvas.addEventListener("mouseup", onDrawMouseUp);
+  drawCanvas.addEventListener("dblclick", onCursorContainerDblClick);
 
-  container.addEventListener("mousedown", onCursorContainerClick);
-  container.addEventListener("dblclick", onCursorContainerDblClick);
+  // Dynamic pointer-events routing: when mouse is near a drawing/handle, catch it; otherwise pass to chart for panning
+  const updatePointerState = (mx, my) => {
+    if (drawTool !== "cursor" || editDragging) {
+      drawCanvas.style.pointerEvents = "auto";
+      return;
+    }
+    let near = false;
+    if (editingDrawing) {
+      if (findHandle(mx, my, editingDrawing) || isNearDrawing(editingDrawing, mx, my)) near = true;
+    }
+    if (!near && drawings.length) {
+      for (const d of drawings) {
+        if (isNearDrawing(d, mx, my)) { near = true; break; }
+      }
+    }
+    drawCanvas.style.pointerEvents = near ? "auto" : "none";
+  };
+
+  container.addEventListener("mousemove", (e) => {
+    const rect = drawCanvas.getBoundingClientRect();
+    updatePointerState(e.clientX - rect.left, e.clientY - rect.top);
+  });
+
   document.addEventListener("mousedown", (e) => {
     const menu = document.getElementById("draw-ctx-menu");
     if (menu && !menu.contains(e.target)) hideDrawCtxMenu();
@@ -63,58 +85,73 @@ function snapTime(time) {
   return sortedTimes[lo];
 }
 
-// Find two adjacent visible bars to derive the pixels-per-second ratio.
-// Walking from the edge inward ensures we get bars that are on screen
-// even when the data edges are scrolled out of view.
-function _visibleBarPair(fromEnd) {
+function snapIndexInBase(time) {
+  if (!baseCandles || !baseCandles.length) return -1;
+  let lo = 0, hi = baseCandles.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (baseCandles[mid].time < time) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > 0 && Math.abs(baseCandles[lo - 1].time - time) < Math.abs(baseCandles[lo].time - time)) {
+    return lo - 1;
+  }
+  return lo;
+}
+
+function getBarSpacingPx() {
   const ts = chart.timeScale();
-  let x1 = null, t1 = null, x2 = null, t2 = null;
-  const n = sortedTimes.length;
-  const step = fromEnd ? -1 : 1;
-  const start = fromEnd ? n - 1 : 0;
-  const stop  = fromEnd ? -1   : n;
-  for (let i = start; i !== stop; i += step) {
-    const cx = ts.timeToCoordinate(sortedTimes[i]);
-    if (cx === null) continue;
-    if (x1 === null) { x1 = cx; t1 = sortedTimes[i]; }
-    else             { x2 = cx; t2 = sortedTimes[i]; break; }
+  const times = sortedTimes && sortedTimes.length ? sortedTimes : (baseCandles ? baseCandles.map(c => c.time) : []);
+  if (!times || times.length < 2) return 8;
+
+  const n = times.length;
+  let x1 = null, i1 = -1, x2 = null, i2 = -1;
+  for (let i = n - 1; i >= 0; i--) {
+    const cx = ts.timeToCoordinate(times[i]);
+    if (cx !== null && cx !== undefined) {
+      if (x1 === null) { x1 = cx; i1 = i; }
+      else             { x2 = cx; i2 = i; break; }
+    }
   }
-  // pps = pixels per second (positive means time increases to the right)
-  if (x1 !== null && x2 !== null && t1 !== t2) {
-    return { x1, t1, pps: (x1 - x2) / (t1 - t2) };
+  if (x1 !== null && x2 !== null && i1 !== i2) {
+    const sp = Math.abs(x1 - x2) / Math.abs(i1 - i2);
+    if (sp > 0.1 && sp < 500) return sp;
   }
-  return null;
+  return 8;
 }
 
 function toXY(time, price) {
   const ts = chart.timeScale();
   let x = ts.timeToCoordinate(time);
 
-  if ((x === null || x === undefined) && sortedTimes.length >= 2) {
+  if ((x === null || x === undefined) && sortedTimes.length >= 1) {
     const n = sortedTimes.length;
-    const first = sortedTimes[0], last = sortedTimes[n - 1];
+    const lastTime = sortedTimes[n - 1];
+    const firstTime = sortedTimes[0];
+    const lastX = ts.timeToCoordinate(lastTime);
+    const firstX = ts.timeToCoordinate(firstTime);
+    const barSpacing = getBarSpacingPx();
 
-    if (time > last) {
-      // Beyond last bar — extrapolate right using nearest visible bars
-      const ref = _visibleBarPair(true);
-      if (ref) x = ref.x1 + (time - ref.t1) * ref.pps;
-    } else if (time < first) {
-      // Before first bar — extrapolate left using nearest visible bars
-      const ref = _visibleBarPair(false);
-      if (ref) x = ref.x1 + (time - ref.t1) * ref.pps;
-    } else {
-      // Within range — binary search + linear interpolation between neighbours
-      let lo = 0, hi = n - 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (sortedTimes[mid] < time) lo = mid + 1;
-        else hi = mid;
+    // Check if time is in full baseCandles (replay future or historical)
+    if (typeof baseCandles !== "undefined" && baseCandles && baseCandles.length > 0) {
+      const targetIdx = snapIndexInBase(time);
+      const currentLastIdx = snapIndexInBase(lastTime);
+
+      if (targetIdx !== -1 && currentLastIdx !== -1 && lastX !== null && lastX !== undefined) {
+        const barDelta = targetIdx - currentLastIdx;
+        x = lastX + barDelta * barSpacing;
       }
-      const tA = sortedTimes[lo - 1], tB = sortedTimes[lo];
-      const xA = ts.timeToCoordinate(tA);
-      const xB = ts.timeToCoordinate(tB);
-      if (xA !== null && xB !== null && tB !== tA)
-        x = xA + ((xB - xA) * (time - tA)) / (tB - tA);
+    }
+
+    if (x === null || x === undefined) {
+      const tf = activeTF || baseTF || 60;
+      if (lastX !== null && lastX !== undefined) {
+        const barDelta = (time - lastTime) / tf;
+        x = lastX + barDelta * barSpacing;
+      } else if (firstX !== null && firstX !== undefined) {
+        const barDelta = (time - firstTime) / tf;
+        x = firstX + barDelta * barSpacing;
+      }
     }
   }
 
@@ -132,30 +169,25 @@ function validCoord(p) {
 function fromXY(x, y) {
   let time = chart.timeScale().coordinateToTime(x);
 
-  if (!time && sortedTimes.length >= 2) {
+  if (!time && sortedTimes.length >= 1) {
     const ts = chart.timeScale();
+    const n = sortedTimes.length;
+    const lastTime = sortedTimes[n - 1];
+    const lastX = ts.timeToCoordinate(lastTime);
+    const barSpacing = getBarSpacingPx();
 
-    // Find the two nearest bars that still have valid screen coordinates.
-    // Walking backward from the end handles the common case where the chart
-    // is scrolled so the last bar is to the right of the visible area.
-    let refX1 = null, refT1 = null, refX2 = null, refT2 = null;
-    for (let i = sortedTimes.length - 1; i >= 0; i--) {
-      const cx = ts.timeToCoordinate(sortedTimes[i]);
-      if (cx === null) continue;
-      if (refX1 === null) { refX1 = cx; refT1 = sortedTimes[i]; }
-      else                { refX2 = cx; refT2 = sortedTimes[i]; break; }
-    }
-
-    if (refX1 !== null && refX2 !== null) {
-      const barW    = refX1 - refX2;          // px per bar (always > 0 going right→left)
-      const interval = refT1 - refT2;         // seconds per bar
-      if (Math.abs(barW) > 0.01) {
-        const barsOff = (x - refX1) / barW;
-        time = Math.round(refT1 + barsOff * interval);
+    if (lastX !== null && lastX !== undefined && barSpacing > 0.01) {
+      const barsOff = Math.round((x - lastX) / barSpacing);
+      if (typeof baseCandles !== "undefined" && baseCandles && baseCandles.length > 0) {
+        const lastIdxInBase = snapIndexInBase(lastTime);
+        const targetIdx = Math.max(0, Math.min(baseCandles.length - 1, lastIdxInBase + barsOff));
+        time = baseCandles[targetIdx].time;
+      } else {
+        const tf = activeTF || baseTF || 60;
+        time = lastTime + barsOff * tf;
       }
     }
-
-    if (!time) time = sortedTimes[sortedTimes.length - 1];
+    if (!time) time = lastTime;
   }
 
   const price = mainSeries ? mainSeries.coordinateToPrice(y) : 0;
@@ -226,6 +258,17 @@ function getHandles(d) {
           y: midY + sign * ny * 28,
         });
       }
+    }
+  } else if ((d.type === "pos_long" || d.type === "pos_short") && d.pts.length >= 3) {
+    const p0 = ptXY(d.pts[0]); // Entry
+    const p1 = ptXY(d.pts[1]); // TP + EndTime
+    const p2 = ptXY(d.pts[2]); // SL
+    if (p0.x !== null && p1.x !== null) {
+      const midX = (p0.x + p1.x) / 2;
+      handles.push({ ptIdx: 0, axis: "y", x: p0.x, y: p0.y }); // Entry handle
+      if (p1.y !== null) handles.push({ ptIdx: 1, axis: "y", x: midX, y: p1.y }); // TP handle
+      if (p2.y !== null) handles.push({ ptIdx: 2, axis: "y", x: midX, y: p2.y }); // SL handle
+      handles.push({ ptIdx: "time", axis: "x", x: p1.x, y: p0.y }); // Width handle
     }
   } else {
     d.pts.forEach((pt, i) => {
@@ -334,9 +377,17 @@ function showDrawCtxMenu(cx, cy, drawing) {
   if (!menu) return;
   const colors = ["#3B82F6","#00C46E","#F59E0B","#F2364A","#A855F7","#ffffff","#00D4FF","#FF8C00"];
   const activeColor = drawing.color || "#3B82F6";
+  const isPos = drawing.type === "pos_long" || drawing.type === "pos_short";
+
   menu.innerHTML = `
     <div class="ctx-section-label">Mode édition</div>
     <div class="ctx-hint">Glissez les ◯ pour modifier</div>
+    ${isPos ? `
+    <div class="ctx-sep"></div>
+    <button onclick="executeTradeFromDrawing(editingDrawing || selectedDrawing)" style="background:var(--primary);color:#fff;font-weight:600;margin-bottom:4px;">
+      ⚡ Exécuter cet Ordre
+    </button>
+    ` : ""}
     <div class="ctx-sep"></div>
     <div class="ctx-section-label">Couleur</div>
     <div class="ctx-colors">
@@ -359,6 +410,30 @@ function showDrawCtxMenu(cx, cy, drawing) {
   if (top + mh > vh - 8) top = cy - mh - 8;
   menu.style.left = left + "px";
   menu.style.top = top + "px";
+}
+
+function executeTradeFromDrawing(d) {
+  if (!d || (d.type !== "pos_long" && d.type !== "pos_short")) return;
+  const isLong = d.type === "pos_long";
+  const entry = d.pts[0].price;
+  const tp = d.pts[1].price;
+  const sl = d.pts[2].price;
+
+  const entryEl = document.getElementById("trade-entry");
+  const tpEl = document.getElementById("trade-tp");
+  const slEl = document.getElementById("trade-sl");
+
+  if (entryEl) entryEl.value = entry.toFixed(5);
+  if (tpEl) tpEl.value = tp.toFixed(5);
+  if (slEl) slEl.value = sl.toFixed(5);
+
+  if (typeof updateRRBadge === "function") updateRRBadge();
+
+  if (typeof executeTrade === "function") {
+    executeTrade(isLong ? "LONG" : "SHORT");
+  }
+  hideDrawCtxMenu();
+  exitEditMode();
 }
 
 function hideDrawCtxMenu() {
@@ -413,17 +488,36 @@ function pasteDrawing() {
   showToast("Dessin collé", "success", 1500);
 }
 
+let _drawMouseDownPos = null;
+
 function onDrawMouseDown(e) {
   const rect = drawCanvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
 
-  if (editingDrawing) {
-    const h = findHandle(mx, my, editingDrawing);
-    if (h || isNearDrawing(editingDrawing, mx, my)) {
-      const origPts = editingDrawing.pts.map((p) => ({ ...p }));
-      // Pre-compute channel center for rotation handle
+  if (drawTool === "cursor") {
+    let found = null;
+    let h = null;
+    if (editingDrawing) {
+      h = findHandle(mx, my, editingDrawing);
+      if (h || isNearDrawing(editingDrawing, mx, my)) {
+        found = editingDrawing;
+      }
+    }
+    if (!found && drawings.length) {
+      for (const d of drawings) {
+        if (isNearDrawing(d, mx, my)) {
+          found = d;
+          h = findHandle(mx, my, d);
+          break;
+        }
+      }
+    }
+
+    if (found) {
+      enterEditMode(found);
+      const origPts = found.pts.map((p) => ({ ...p }));
       let origCenter = null;
-      if (editingDrawing.type === "channel" && origPts.length >= 2) {
+      if (found.type === "channel" && origPts.length >= 2) {
         const cp0 = toXY(origPts[0].time, origPts[0].price);
         const cp1 = toXY(origPts[1].time, origPts[1].price);
         if (cp0.x !== null && cp1.x !== null)
@@ -439,16 +533,22 @@ function onDrawMouseDown(e) {
           const c = toXY(p.time, p.price);
           return { sx: c.x ?? 0, sy: c.y ?? 0 };
         }),
-        origCenter, // used for channel rotation
+        origCenter,
       };
       editDragging = true;
       drawCanvas.style.cursor = h ? "grabbing" : "move";
+      e.stopPropagation();
+      return;
     } else {
       exitEditMode();
+      selectedDrawing = null;
+      drawRedraw();
+      return;
     }
-    return;
   }
 
+  // Active drawing tool (trendline, rect, fib, ray, channel, pos_long, pos_short, etc.)
+  exitEditMode();
   let pt = fromXY(mx, my);
   if (!pt.time) return;
   if (drawTool === "text") { showTextInput(mx, my, pt); return; }
@@ -472,26 +572,56 @@ function onDrawMouseDown(e) {
     return p;
   };
 
+  if (drawTool === "pos_long" || drawTool === "pos_short") {
+    const isLong = drawTool === "pos_long";
+    const entryPrice = pt.price;
+    const entryTime = pt.time;
+    const tfSpan = (activeTF || 60) * 35;
+    const tpPrice = isLong ? entryPrice * 1.02 : entryPrice * 0.98;
+    const slPrice = isLong ? entryPrice * 0.99 : entryPrice * 1.01;
+    _pushUndo();
+    const newPosDraw = {
+      type: drawTool,
+      pts: [
+        { time: entryTime, price: entryPrice },
+        { time: entryTime + tfSpan, price: tpPrice },
+        { time: entryTime + tfSpan, price: slPrice }
+      ],
+      id: _nextDrawId(),
+      color: isLong ? "#00D26A" : "#FF3B5C"
+    };
+    drawings.push(newPosDraw);
+    drawPts = []; drawPreview = null; _drawMouseDownPos = null;
+    drawRedraw(); saveDrawings();
+    setDrawTool("cursor");
+    enterEditMode(newPosDraw);
+    showToast(`Outil ${isLong ? "Long" : "Short"} placé — ajustez les poignées`, "info", 2500);
+    return;
+  }
+
   if (needsTwo(drawTool)) {
     if (drawPts.length === 0) {
       drawPts.push(_applySnap(pt));
+      _drawMouseDownPos = { x: mx, y: my };
     } else {
       pt = _applySnap(_applyAngle(pt, mx, my));
       _pushUndo();
       drawings.push({ type: drawTool, pts: [drawPts[0], pt], id: _nextDrawId(), color: DRAW_COLORS.default });
-      drawPts = []; drawPreview = null;
+      drawPts = []; drawPreview = null; _drawMouseDownPos = null;
       drawRedraw(); saveDrawings(); setDrawTool("cursor");
     }
   } else if (needsThree(drawTool)) {
     if (drawPts.length === 0) {
       drawPts.push(_applySnap(pt));
+      _drawMouseDownPos = { x: mx, y: my };
     } else if (drawPts.length === 1) {
       drawPts.push(_applySnap(_applyAngle(pt, mx, my)));
+      _drawMouseDownPos = { x: mx, y: my };
     } else {
       pt = _applySnap(pt);
       _pushUndo();
       drawings.push({ type: drawTool, pts: [drawPts[0], drawPts[1], pt], id: _nextDrawId(), color: DRAW_COLORS.default });
-      drawPts = []; drawPreview = null;
+      drawPts = []; drawPreview = null; _drawMouseDownPos = null;
       drawRedraw(); saveDrawings(); setDrawTool("cursor");
     }
   } else {
@@ -624,6 +754,9 @@ function onDrawMouseMove(e) {
         applyX(0); setPixel(0, true, false);
       } else if (pid === "mr") {
         applyX(1); setPixel(1, true, false);
+      } else if (pid === "time") {
+        applyX(1); applyX(2);
+        setPixel(1, true, false); setPixel(2, true, false);
       } else if (typeof pid === "number") {
         if (ax === "y" || ax === "xy") applyY(pid);
         if (ax === "x" || ax === "xy") applyX(pid);
@@ -642,6 +775,15 @@ function onDrawMouseMove(e) {
       : isNearDrawing(editingDrawing, mx, my)
         ? "move"
         : "default";
+    return;
+  }
+
+  if (drawTool === "cursor" && !editDragging) {
+    let near = false;
+    for (const d of drawings) {
+      if (isNearDrawing(d, mx, my)) { near = true; break; }
+    }
+    drawCanvas.style.cursor = near ? "move" : "default";
     return;
   }
 
@@ -675,7 +817,11 @@ function onDrawMouseMove(e) {
   drawRedraw();
 }
 
-function onDrawMouseUp(_e) {
+function onDrawMouseUp(e) {
+  const rect = drawCanvas.getBoundingClientRect();
+  const mx = e ? e.clientX - rect.left : 0;
+  const my = e ? e.clientY - rect.top : 0;
+
   if (editDragging) {
     if (editingDrawing && editingDrawing.type === "rect") normalizeRect(editingDrawing);
     if (editingDrawing)
@@ -685,6 +831,22 @@ function onDrawMouseUp(_e) {
     drawCanvas.style.cursor = editingDrawing ? "default" : "";
     saveDrawings();
     drawRedraw();
+    return;
+  }
+
+  // Handle Drag-to-Draw Release (e.g. click-drag-release to draw trendline or rectangle)
+  if (drawTool !== "cursor" && needsTwo(drawTool) && drawPts.length === 1 && _drawMouseDownPos) {
+    const dist = Math.hypot(mx - _drawMouseDownPos.x, my - _drawMouseDownPos.y);
+    if (dist > 15) {
+      let pt = fromXY(mx, my);
+      if (pt.time) {
+        if (_ctrlHeld) { const s = _snapToOHLC(pt.time, pt.price); pt.time = s.time; pt.price = s.price; }
+        _pushUndo();
+        drawings.push({ type: drawTool, pts: [drawPts[0], pt], id: _nextDrawId(), color: DRAW_COLORS.default });
+        drawPts = []; drawPreview = null; _drawMouseDownPos = null;
+        drawRedraw(); saveDrawings(); setDrawTool("cursor");
+      }
+    }
   }
 }
 
@@ -727,6 +889,15 @@ function isNearDrawing(d, mx, my) {
       (Math.abs(my - y0) < T && inX) || (Math.abs(my - y1) < T && inX);
     const inside = mx > x0 && mx < x1 && my > y0 && my < y1;
     return nearEdge || inside;
+  }
+  if ((d.type === "pos_long" || d.type === "pos_short") && d.pts.length >= 3) {
+    const p0 = toXY(d.pts[0].time, d.pts[0].price);
+    const p1 = toXY(d.pts[1].time, d.pts[1].price);
+    const p2 = toXY(d.pts[2].time, d.pts[2].price);
+    if (p0.x === null || p1.x === null || p2.y === null || p1.y === null || p0.y === null) return false;
+    const minX = Math.min(p0.x, p1.x) - T, maxX = Math.max(p0.x, p1.x) + T;
+    const minY = Math.min(p0.y, p1.y, p2.y) - T, maxY = Math.max(p0.y, p1.y, p2.y) + T;
+    return mx >= minX && mx <= maxX && my >= minY && my <= maxY;
   }
   if (d.type === "fib" && d.pts.length >= 2) {
     const p0 = toXY(d.pts[0].time, d.pts[0].price);
@@ -800,7 +971,7 @@ function clearAllDrawings() {
   saveDrawings();
 }
 
-// ── DRAW REDRAW ───────────────────────────────────────────
+// ── DRAW REDRAW (with Viewport Culling Optimization) ──────
 function drawRedraw() {
   if (!drawCtx) return;
   const W = drawCanvas.width / (window.devicePixelRatio || 1);
@@ -808,7 +979,34 @@ function drawRedraw() {
   drawCtx.clearRect(0, 0, W, H);
   drawForexSessions(W, H);   // ① zones forex (fond, derrière tout)
   drawSeparators(W, H);      // ② séparateurs de session
-  drawings.forEach((d) => drawShape(d, d === selectedDrawing, W, H));
+
+  const ts = chart ? chart.timeScale() : null;
+
+  drawings.forEach((d) => {
+    // Spatial Culling: Skip drawings entirely off-screen
+    if (d.type !== "hline" && d.type !== "ray" && d.pts && d.pts.length && ts) {
+      let isVisible = false;
+      for (const pt of d.pts) {
+        const cx = ts.timeToCoordinate(pt.time);
+        if (cx !== null && cx >= -150 && cx <= W + 150) {
+          isVisible = true;
+          break;
+        }
+      }
+      if (!isVisible && d.pts.length >= 2) {
+        const c0 = ts.timeToCoordinate(d.pts[0].time);
+        const c1 = ts.timeToCoordinate(d.pts[1].time);
+        if (c0 !== null && c1 !== null && Math.min(c0, c1) <= W && Math.max(c0, c1) >= 0) {
+          isVisible = true;
+        }
+      }
+      // If still not visible and not selected/editing, skip rendering
+      if (!isVisible && d !== selectedDrawing && d !== editingDrawing) return;
+    }
+
+    drawShape(d, d === selectedDrawing, W, H);
+  });
+
   if (drawPts.length && drawPreview) {
     if (needsThree(drawTool) && drawPts.length === 2) {
       // 3rd point preview (channel width)
@@ -980,6 +1178,101 @@ function drawShape(d, selected, W, H, preview) {
       drawCtx.restore();
     }
     if (preview) drawAngleDistance(p0, p1, baseColor);
+
+  } else if ((d.type === "pos_long" || d.type === "pos_short") && p0 && p1) {
+    if (!validCoord(p0) || !validCoord(p1)) { drawCtx.restore(); return; }
+    const p2 = d.pts[2] ? _pt2xy(d.pts[2]) : null;
+    if (!validCoord(p2)) { drawCtx.restore(); return; }
+
+    const isLong = d.type === "pos_long";
+    const entryPrice = d.pts[0].price;
+    const tpPrice = d.pts[1].price;
+    const slPrice = d.pts[2].price;
+
+    const leftX = p0.x;
+    const rightX = p1.x;
+    const width = Math.max(30, rightX - leftX);
+
+    const entryY = p0.y;
+    const tpY = p1.y;
+    const slY = p2.y;
+
+    const profitDist = Math.abs(tpPrice - entryPrice);
+    const lossDist = Math.abs(entryPrice - slPrice);
+    const rr = lossDist > 0 ? (profitDist / lossDist).toFixed(2) : "—";
+    const profitPct = ((profitDist / entryPrice) * 100).toFixed(2);
+    const lossPct = ((lossDist / entryPrice) * 100).toFixed(2);
+
+    const currentBal = (typeof tradeSim !== "undefined" && tradeSim.balance) ? tradeSim.balance : 10000;
+    const riskDollar = currentBal * 0.02;
+    const profitDollar = lossDist > 0 ? riskDollar * (profitDist / lossDist) : 0;
+
+    // 1. Profit (TP) Box - Green
+    const tpBoxTop = Math.min(entryY, tpY);
+    const tpBoxH = Math.abs(entryY - tpY);
+    drawCtx.fillStyle = "rgba(0, 210, 106, 0.18)";
+    drawCtx.strokeStyle = "#00D26A";
+    drawCtx.lineWidth = 1;
+    drawCtx.beginPath();
+    drawCtx.rect(leftX, tpBoxTop, width, tpBoxH);
+    drawCtx.fill();
+    drawCtx.stroke();
+
+    // 2. Loss (SL) Box - Red
+    const slBoxTop = Math.min(entryY, slY);
+    const slBoxH = Math.abs(entryY - slY);
+    drawCtx.fillStyle = "rgba(255, 59, 92, 0.18)";
+    drawCtx.strokeStyle = "#FF3B5C";
+    drawCtx.lineWidth = 1;
+    drawCtx.beginPath();
+    drawCtx.rect(leftX, slBoxTop, width, slBoxH);
+    drawCtx.fill();
+    drawCtx.stroke();
+
+    // 3. Middle Entry Line
+    drawCtx.strokeStyle = isLong ? "#60A5FA" : "#F59E0B";
+    drawCtx.lineWidth = 1.8;
+    drawCtx.beginPath();
+    drawCtx.moveTo(leftX, entryY);
+    drawCtx.lineTo(rightX, entryY);
+    drawCtx.stroke();
+
+    // 4. Labels inside boxes
+    drawCtx.font = "bold 10px 'JetBrains Mono', monospace";
+
+    // TP Label
+    drawCtx.fillStyle = "#00D26A";
+    const tpText = `TP: +${fmt(profitDist)} (+${profitPct}%)  R:R: 1:${rr}  (+$${profitDollar.toFixed(0)})`;
+    drawCtx.fillText(tpText, leftX + 6, tpBoxTop + 13);
+
+    // SL Label
+    drawCtx.fillStyle = "#FF3B5C";
+    const slText = `SL: -${fmt(lossDist)} (-${lossPct}%)  (-$${riskDollar.toFixed(0)})`;
+    drawCtx.fillText(slText, leftX + 6, slBoxTop + slBoxH - 5);
+
+    // Entry label
+    drawCtx.fillStyle = "#E2E8F0";
+    drawCtx.font = "10px 'JetBrains Mono', monospace";
+    drawCtx.fillText(`Entrée: ${fmt(entryPrice)}`, leftX + 6, isLong ? entryY + 12 : entryY - 4);
+
+    // Quick trade action badge
+    if (isEditing || selected) {
+      const badgeW = 110;
+      const badgeH = 20;
+      const bx = rightX - badgeW - 4;
+      const by = entryY - badgeH / 2;
+      drawCtx.fillStyle = "#1E293B";
+      drawCtx.strokeStyle = "#4F46E5";
+      drawCtx.lineWidth = 1;
+      drawCtx.beginPath();
+      drawCtx.roundRect(bx, by, badgeW, badgeH, 4);
+      drawCtx.fill();
+      drawCtx.stroke();
+
+      drawCtx.fillStyle = "#818CF8";
+      drawCtx.font = "600 10px 'Inter', sans-serif";
+      drawCtx.fillText("⚡ Placer Ordre", bx + 12, by + 14);
+    }
   }
 
   // EDIT HANDLES

@@ -94,6 +94,38 @@
           </svg>
         </button>
 
+        <button class="tv-icon-btn" id="btn-live" onclick="openLiveModal()" title="Marché en direct (Binance Live)" aria-label="Données directes">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+            <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+            <line x1="12" y1="20" x2="12.01" y2="20" stroke-width="3"/>
+          </svg>
+          <span id="live-status-indicator" class="live-dot-indicator"></span>
+        </button>
+
+        <button class="tv-icon-btn" id="btn-datasets" onclick="openDatasetsModal()" title="Mes Datasets & Sessions" aria-label="Jeux de données sauvegardés">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+          </svg>
+        </button>
+
+        <button class="tv-icon-btn" id="btn-snapshot" onclick="captureChartSnapshot()" title="Capture HD (P)" aria-label="Capture d'écran">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </button>
+
+        <button class="tv-icon-btn active" id="btn-sound" onclick="toggleSound()" title="Sons trading" aria-label="Activer/désactiver les sons">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+          </svg>
+        </button>
+
         <!-- Séparateurs de session -->
         <div class="tv-dropdown sep-dropdown" id="dropdown-sep">
           <button class="tv-icon-btn" id="btn-sep" onclick="toggleDropdown('menu-sep')" title="Séparateurs de session">
@@ -147,30 +179,30 @@
             </div>
             <div class="forex-divider"></div>
 
-            <label class="forex-session-row" onclick="toggleForexSession('sydney')">
+            <div class="forex-session-row" onclick="toggleForexSession('sydney')">
               <span class="forex-dot" style="background:#A78BFA"></span>
               <span class="forex-name">Sydney</span>
               <span class="forex-hours">22h – 07h</span>
-              <input type="checkbox" id="forex-sydney" onchange="toggleForexSession('sydney')" onclick="event.stopPropagation()">
-            </label>
-            <label class="forex-session-row" onclick="toggleForexSession('tokyo')">
+              <input type="checkbox" id="forex-sydney" style="pointer-events:none">
+            </div>
+            <div class="forex-session-row" onclick="toggleForexSession('tokyo')">
               <span class="forex-dot" style="background:#FB923C"></span>
               <span class="forex-name">Tokyo</span>
               <span class="forex-hours">00h – 09h</span>
-              <input type="checkbox" id="forex-tokyo" onchange="toggleForexSession('tokyo')" onclick="event.stopPropagation()">
-            </label>
-            <label class="forex-session-row" onclick="toggleForexSession('london')">
+              <input type="checkbox" id="forex-tokyo" style="pointer-events:none">
+            </div>
+            <div class="forex-session-row" onclick="toggleForexSession('london')">
               <span class="forex-dot" style="background:#60A5FA"></span>
               <span class="forex-name">Londres</span>
               <span class="forex-hours">08h – 17h</span>
-              <input type="checkbox" id="forex-london" onchange="toggleForexSession('london')" onclick="event.stopPropagation()">
-            </label>
-            <label class="forex-session-row" onclick="toggleForexSession('newyork')">
+              <input type="checkbox" id="forex-london" style="pointer-events:none">
+            </div>
+            <div class="forex-session-row" onclick="toggleForexSession('newyork')">
               <span class="forex-dot" style="background:#34D399"></span>
               <span class="forex-name">New York</span>
               <span class="forex-hours">13h – 22h</span>
-              <input type="checkbox" id="forex-newyork" onchange="toggleForexSession('newyork')" onclick="event.stopPropagation()">
-            </label>
+              <input type="checkbox" id="forex-newyork" style="pointer-events:none">
+            </div>
 
             <div class="forex-divider"></div>
 
@@ -366,6 +398,26 @@
           <path d="M3 18 L9 6 L21 8 L15 20 Z" fill="currentColor" fill-opacity="0.15"/>
           <line x1="3" y1="18" x2="9" y2="6"/>
           <line x1="15" y1="20" x2="21" y2="8"/>
+        </svg>
+      </button>
+
+      <div class="draw-sep-h"></div>
+
+      <!-- Position Long (Risk:Reward) -->
+      <button class="draw-btn" id="dt-pos-long" title="Position Long (9)" onclick="setDrawTool('pos_long')" aria-label="Position Long (R:R)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#00D26A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="8" fill="rgba(0,210,106,0.25)" stroke="#00D26A"/>
+          <rect x="3" y="11" width="18" height="10" fill="rgba(255,59,92,0.25)" stroke="#FF3B5C"/>
+          <line x1="3" y1="11" x2="21" y2="11" stroke="#60A5FA" stroke-width="2"/>
+        </svg>
+      </button>
+
+      <!-- Position Short (Risk:Reward) -->
+      <button class="draw-btn" id="dt-pos-short" title="Position Short (0)" onclick="setDrawTool('pos_short')" aria-label="Position Short (R:R)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#FF3B5C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="10" fill="rgba(255,59,92,0.25)" stroke="#FF3B5C"/>
+          <rect x="3" y="13" width="18" height="8" fill="rgba(0,210,106,0.25)" stroke="#00D26A"/>
+          <line x1="3" y1="13" x2="21" y2="13" stroke="#F59E0B" stroke-width="2"/>
         </svg>
       </button>
 
@@ -580,6 +632,8 @@
       <div class="rp-actions">
         <button class="trade-btn buy"   id="btn-buy"       onclick="executeTrade('LONG')">Buy</button>
         <button class="trade-btn sell"  id="btn-sell"      onclick="executeTrade('SHORT')">Sell</button>
+        <button class="trade-btn be"    id="btn-be"        onclick="setBreakeven()" title="Passer le Stop Loss à Breakeven (0 Risque)">BE</button>
+        <button class="trade-btn scale" id="btn-scale-50"  onclick="closePartial(50)" title="Clôturer 50% de la position">½</button>
         <button class="trade-btn close" id="btn-close-pos" onclick="closePosition('MANUAL')" style="display:none">Fermer</button>
         <button class="trade-btn" id="btn-history" onclick="toggleTradeHistory()" title="Journal de trades"
           style="background:var(--bg-elevated);border:1px solid var(--border-light);color:var(--text-secondary);min-width:34px;padding:0;">
@@ -749,6 +803,14 @@
         <div class="th-stat-label">Max Streak ↓</div>
         <div class="th-stat-val" id="th-streak">—</div>
       </div>
+      <div class="th-stat">
+        <div class="th-stat-label">Expectancy</div>
+        <div class="th-stat-val" id="th-expectancy">—</div>
+      </div>
+      <div class="th-stat">
+        <div class="th-stat-label">Sharpe Est.</div>
+        <div class="th-stat-val" id="th-sharpe">—</div>
+      </div>
     </div>
     <!-- Equity Curve -->
     <div id="equity-curve-container" style="margin:8px 0;height:60px;">
@@ -756,6 +818,61 @@
     </div>
     <div class="th-list" id="th-list">
       <div class="th-empty">Aucun trade fermé</div>
+    </div>
+  </div>
+
+  <!-- Live Market Modal -->
+  <div id="live-modal" class="custom-modal" onclick="if(event.target===this)closeLiveModal()">
+    <div class="custom-modal-box" style="max-width: 640px;">
+      <div class="custom-modal-header">
+        <div class="custom-modal-title">
+          <span class="live-dot-indicator online" style="position:static;display:inline-block;margin-right:6px;"></span>
+          Paires Forex & Marchés en Direct (Replay & Live)
+        </div>
+        <button class="custom-modal-close" onclick="closeLiveModal()">✕</button>
+      </div>
+      <div class="custom-modal-body">
+        <div id="live-pairs-list"></div>
+      </div>
+      <div class="custom-modal-actions">
+        <button class="btn-sm btn-danger" onclick="disconnectLive(); closeLiveModal();">Déconnecter le flux</button>
+        <button class="btn-sm" onclick="closeLiveModal()">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Datasets & Sessions Modal -->
+  <div id="datasets-modal" class="custom-modal" onclick="if(event.target===this)closeDatasetsModal()">
+    <div class="custom-modal-box" style="max-width: 620px;">
+      <div class="custom-modal-header">
+        <div class="custom-modal-title">💾 Datasets & Sessions Sauvegardées</div>
+        <button class="custom-modal-close" onclick="closeDatasetsModal()">✕</button>
+      </div>
+      <div class="custom-modal-body">
+        <div id="datasets-list" class="datasets-list-wrap"></div>
+      </div>
+      <div class="custom-modal-actions">
+        <button class="btn-sm btn-primary" onclick="openModal(); closeDatasetsModal();">+ Importer nouveau CSV</button>
+        <button class="btn-sm" onclick="closeDatasetsModal()">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Snapshot Preview Modal -->
+  <div id="snapshot-modal" class="custom-modal" onclick="if(event.target===this)closeSnapshotModal()">
+    <div class="custom-modal-box snapshot-box">
+      <div class="custom-modal-header">
+        <div class="custom-modal-title">📸 Capture HD du Graphique</div>
+        <button class="custom-modal-close" onclick="closeSnapshotModal()">✕</button>
+      </div>
+      <div class="custom-modal-body snapshot-body">
+        <img id="snapshot-preview-img" alt="Aperçu Capture" class="snapshot-img" />
+      </div>
+      <div class="custom-modal-actions">
+        <button class="btn-sm btn-primary" onclick="copySnapshotToClipboard()">📋 Copier l'image</button>
+        <button class="btn-sm btn-primary" onclick="downloadSnapshotPNG()">📥 Télécharger PNG</button>
+        <button class="btn-sm" onclick="closeSnapshotModal()">Fermer</button>
+      </div>
     </div>
   </div>
 
@@ -776,16 +893,19 @@
         <div class="shortcut-row"><span class="shortcut-desc">Fibonacci</span><span class="shortcut-keys"><kbd>6</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Texte</span><span class="shortcut-keys"><kbd>7</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Zone de tendance</span><span class="shortcut-keys"><kbd>8</kbd></span></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Position Long (R:R)</span><span class="shortcut-keys"><kbd>9</kbd></span></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Position Short (R:R)</span><span class="shortcut-keys"><kbd>0</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Rayon</span><span class="shortcut-keys"><kbd>R</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Angle contraint 45°</span><span class="shortcut-keys"><kbd>Shift</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Snap OHLC</span><span class="shortcut-keys"><kbd>Ctrl</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Supprimer sélection</span><span class="shortcut-keys"><kbd>Del</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Annuler</span><span class="shortcut-keys"><kbd>Ctrl</kbd><span class="shortcut-plus">+</span><kbd>Z</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Rétablir</span><span class="shortcut-keys"><kbd>Ctrl</kbd><span class="shortcut-plus">+</span><kbd>Y</kbd></span></div>
-        <div class="shortcut-row"><span class="shortcut-desc">Snap OHLC (pendant dessin)</span><span class="shortcut-keys"><kbd>Shift</kbd></span></div>
       </div>
       <div class="shortcuts-section">
-        <div class="shortcuts-section-label">Navigation</div>
+        <div class="shortcuts-section-label">Trading & Navigation</div>
+        <div class="shortcut-row"><span class="shortcut-desc">Breakeven SL</span><span class="shortcut-keys"><kbd>B</kbd></span></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Capture d'écran HD</span><span class="shortcut-keys"><kbd>P</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Ajuster la vue</span><span class="shortcut-keys"><kbd>Ctrl</kbd><span class="shortcut-plus">+</span><kbd>F</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Importer des données</span><span class="shortcut-keys"><kbd>Ctrl</kbd><span class="shortcut-plus">+</span><kbd>O</kbd></span></div>
         <div class="shortcut-row"><span class="shortcut-desc">Fermer / Quitter</span><span class="shortcut-keys"><kbd>Esc</kbd></span></div>
@@ -803,7 +923,12 @@
   <!-- Snap OHLC indicator -->
   <div id="snap-badge" class="snap-active-indicator">⬡ Snap OHLC actif</div>
 
+  <!-- Scripts -->
   <script src="js/config.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/snapshot.js"></script>
+  <script src="js/live.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/storage.js"></script>
   <script src="js/chart.js"></script>

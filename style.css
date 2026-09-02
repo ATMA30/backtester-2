@@ -2611,3 +2611,271 @@ kbd {
   transition: all 0.15s;
 }
 #pp-cancel:hover { border-color: var(--bear); color: var(--bear); background: var(--bear-dim); }
+
+/* ══════════════════════════════════════════════════════════════════
+   LIVE & ENHANCED MODULES STYLING
+══════════════════════════════════════════════════════════════════ */
+.live-dot-indicator {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #64748B;
+  transition: all 0.2s ease;
+}
+
+.live-dot-indicator.online {
+  background: #00D26A;
+  box-shadow: 0 0 8px #00D26A;
+  animation: pulse-live 1.8s infinite;
+}
+
+@keyframes pulse-live {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 210, 106, 0.7); }
+  70% { transform: scale(1.15); box-shadow: 0 0 0 6px rgba(0, 210, 106, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 210, 106, 0); }
+}
+
+/* Trade bar additions: BE & Scale */
+.trade-btn.be {
+  background: rgba(96, 165, 250, 0.15);
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  color: #60A5FA;
+  font-weight: 700;
+  min-width: 32px;
+  padding: 0 8px;
+}
+.trade-btn.be:hover {
+  background: #60A5FA;
+  color: #060810;
+}
+
+.trade-btn.scale {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #F59E0B;
+  font-weight: 700;
+  min-width: 28px;
+  padding: 0 6px;
+}
+.trade-btn.scale:hover {
+  background: #F59E0B;
+  color: #060810;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CUSTOM MODALS (Live, Datasets, Snapshot)
+══════════════════════════════════════════════════════════════════ */
+.custom-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.custom-modal.open {
+  display: flex;
+  opacity: 1;
+}
+
+.custom-modal-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6);
+  width: 90%;
+  max-width: 520px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modal-pop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modal-pop {
+  from { transform: scale(0.96) translateY(8px); opacity: 0; }
+  to { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+.custom-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.custom-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+}
+
+.custom-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+.custom-modal-close:hover { color: var(--text-primary); background: var(--bg-overlay); }
+
+.custom-modal-body {
+  padding: 18px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.custom-modal-actions {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  background: var(--bg-surface);
+}
+
+.btn-sm {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-sm:hover { background: var(--bg-overlay); border-color: var(--border-hover); }
+
+.btn-sm.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.btn-sm.btn-primary:hover { background: var(--primary-hover); }
+
+.btn-sm.btn-danger {
+  background: rgba(255, 59, 92, 0.15);
+  border-color: rgba(255, 59, 92, 0.35);
+  color: #FF3B5C;
+}
+.btn-sm.btn-danger:hover { background: #FF3B5C; color: #fff; }
+
+/* Live Pairs Grid */
+.live-pairs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.live-pair-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.live-pair-card:hover {
+  background: var(--bg-overlay);
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+.live-pair-card.active {
+  border-color: #00D26A;
+  background: rgba(0, 210, 106, 0.08);
+}
+
+.live-pair-info {
+  display: flex;
+  flex-direction: column;
+}
+.live-pair-symbol {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.live-pair-name {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.live-pair-badge {
+  font-size: 9.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+/* Datasets List */
+.datasets-list-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dataset-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.dataset-item-info {
+  display: flex;
+  flex-direction: column;
+}
+.dataset-item-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.dataset-item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.dataset-item-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Snapshot Modal */
+.custom-modal-box.snapshot-box {
+  max-width: 820px;
+}
+.snapshot-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #030408;
+  padding: 12px;
+}
+.snapshot-img {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}

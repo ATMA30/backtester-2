@@ -36,7 +36,14 @@ let baseFlatLows = null, baseFlatCloses = null, baseFlatVolumes = null;
 let aggWorker = null;
 
 // Trading
-const tradeSim = { balance: 10000, positions: [], pendingOrders: [], history: [] };
+const tradeSim = {
+  balance: 10000,
+  positions: [],
+  pendingOrders: [],
+  history: [],
+  spread: 0,        // spread in price points
+  commissionPct: 0, // commission % per trade
+};
 let _nextTradeId = 1;
 
 // Replay
@@ -67,7 +74,16 @@ const LS_PREFS    = "tvp_prefs";
 const MAX_DISPLAY = 200000;
 const HANDLE_R = 6;
 const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
-const DRAW_COLORS = { default: "#3B82F6", fib: "#F59E0B", rect: "rgba(59,130,246,0.10)", sel: "#00C46E" };
+const DRAW_COLORS = {
+  default: "#3B82F6",
+  fib: "#F59E0B",
+  rect: "rgba(59,130,246,0.10)",
+  sel: "#00C46E",
+  longProfit: "rgba(0, 210, 106, 0.18)",
+  longLoss: "rgba(255, 59, 92, 0.18)",
+  longBorder: "#00D26A",
+  shortBorder: "#FF3B5C",
+};
 const IND_SWATCH_COLORS = ["#3B82F6","#00C46E","#F59E0B","#F2364A","#A855F7","#00D4FF","#FF8C00","#ffffff"];
 
 const TF_DEFS = [

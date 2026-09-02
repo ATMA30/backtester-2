@@ -33,6 +33,12 @@ function startReplayMode() {
     return;
   }
 
+  // If live WebSocket is connected, pause it during replay
+  if (typeof _isLiveConnected !== "undefined" && _isLiveConnected) {
+    if (typeof pauseLiveStream === "function") pauseLiveStream();
+    showToast("⏸ Flux live mis en pause pendant le Replay", "info", 2500);
+  }
+
   if (replay.picking) {
     replay.picking = false;
     document.getElementById("btn-replay").classList.remove("active");
@@ -110,6 +116,7 @@ function startReplayMode() {
 }
 
 function evalTradeSimLogic(c) {
+  if (!c) return;
   for (let i = tradeSim.pendingOrders.length - 1; i >= 0; i--) {
     const p = tradeSim.pendingOrders[i];
     let hit = false;
@@ -140,55 +147,115 @@ function evalTradeSimLogic(c) {
   updateSimUI(c.close);
 }
 
+// ── FAST REPLAY RENDER SLICE (NO RESETTING ZOOM OR OVERWRITING DRAWINGS) ──
+function renderReplaySlice(upToIdx) {
+  if (!baseCandles || upToIdx < 0 || upToIdx >= baseCandles.length) return;
+  const visible = baseCandles.slice(0, upToIdx + 1);
+  const n = visible.length;
+
+  let displayCandles = visible;
+  if (activeTF > baseTF) {
+    displayCandles = aggregateCandles(visible, activeTF, activeTFType);
+  }
+
+  allCandles = displayCandles;
+  sortedTimes = displayCandles.map(c => c.time);
+
+  const dn = displayCandles.length;
+  if (currentType === "Line" || currentType === "Area") {
+    const arr = new Array(dn);
+    for (let i = 0; i < dn; i++) arr[i] = { time: displayCandles[i].time, value: displayCandles[i].close };
+    mainSeries.setData(arr);
+  } else {
+    mainSeries.setData(displayCandles);
+  }
+
+  if (volumeSeries && showVolume) {
+    const volData = new Array(dn);
+    const volBull = "rgba(0,210,106,0.45)", volBear = "rgba(255,59,92,0.35)";
+    for (let i = 0; i < dn; i++) {
+      volData[i] = {
+        time: displayCandles[i].time,
+        value: displayCandles[i].volume || 0,
+        color: displayCandles[i].close >= displayCandles[i].open ? volBull : volBear,
+      };
+    }
+    volumeSeries.setData(volData);
+  }
+
+  // Update indicators without wiping cache or throwing
+  try {
+    renderIndicators(displayCandles);
+  } catch (e) {
+    console.warn("Indicator render warning in replay:", e);
+  }
+
+  // Redraw drawings on overlay canvas
+  if (drawings && drawings.length) {
+    requestAnimationFrame(drawRedraw);
+  }
+
+  // Update topbar ticker
+  const lastC = displayCandles[dn - 1];
+  if (lastC) {
+    const lastChg = lastC.open > 0 ? ((lastC.close - lastC.open) / lastC.open) * 100 : 0;
+    if (typeof _updateTopbarTicker === "function") _updateTopbarTicker(lastC.close, lastChg);
+  }
+}
+
 function _updateReplaySeries() {
   const c = baseCandles[replay.idx];
-  let bar = c;
+  if (!c) return;
 
   if (activeTF > baseTF) {
-    let o = c.open, h = c.high, l = c.low, closePrice = c.close, v = c.volume || 0;
-    const bucketTime = getCalendarBucket(c.time, activeTFType, activeTF);
-    for (let i = replay.idx - 1; i >= replay.startIdx; i--) {
-      const bCandle = baseCandles[i];
-      if (getCalendarBucket(bCandle.time, activeTFType, activeTF) !== bucketTime) break;
-      if (bCandle.high > h) h = bCandle.high;
-      if (bCandle.low < l) l = bCandle.low;
-      o = bCandle.open;
-      v += bCandle.volume || 0;
+    // If on higher timeframe, re-slice to maintain accurate aggregation
+    renderReplaySlice(replay.idx);
+    return;
+  }
+
+  // On base timeframe, update bar incrementally
+  try {
+    if (mainSeries) {
+      if (currentType === "Line" || currentType === "Area") {
+        mainSeries.update({ time: c.time, value: c.close });
+      } else {
+        mainSeries.update(c);
+      }
     }
-    bar = { time: bucketTime, open: o, high: h, low: l, close: closePrice, volume: v };
-  }
-
-  if (mainSeries) {
-    if (currentType === "Line" || currentType === "Area") {
-      mainSeries.update({ time: bar.time, value: bar.close });
-    } else {
-      mainSeries.update(bar);
+    if (volumeSeries && showVolume) {
+      volumeSeries.update({
+        time: c.time,
+        value: c.volume || 0,
+        color: c.close >= c.open ? "rgba(0,210,106,0.50)" : "rgba(242,54,74,0.50)",
+      });
     }
-  }
-  if (volumeSeries) {
-    volumeSeries.update({
-      time: bar.time,
-      value: bar.volume || 0,
-      color: bar.close >= bar.open ? "rgba(0,196,110,0.50)" : "rgba(242,54,74,0.50)",
-    });
-  }
 
-  if (!sortedTimes.length || sortedTimes[sortedTimes.length - 1] < bar.time) {
-    sortedTimes.push(bar.time);
-  }
-
-  if (allCandles && allCandles.length > 0) {
-    if (allCandles[allCandles.length - 1].time === bar.time) {
-      allCandles[allCandles.length - 1] = bar;
-    } else {
-      allCandles.push(bar);
+    if (!sortedTimes.length || sortedTimes[sortedTimes.length - 1] < c.time) {
+      sortedTimes.push(c.time);
     }
-  }
+    if (allCandles && allCandles.length > 0) {
+      if (allCandles[allCandles.length - 1].time === c.time) {
+        allCandles[allCandles.length - 1] = c;
+      } else {
+        allCandles.push(c);
+      }
+    }
 
-  updateIndicatorsLive(allCandles, bar.time);
+    if (typeof updateIndicatorsLive === "function") {
+      updateIndicatorsLive(allCandles, c.time);
+    }
 
-  if (drawings.length) {
-    requestAnimationFrame(drawRedraw);
+    if (drawings.length) {
+      requestAnimationFrame(drawRedraw);
+    }
+
+    if (typeof _updateTopbarTicker === "function") {
+      const chg = c.open > 0 ? ((c.close - c.open) / c.open) * 100 : 0;
+      _updateTopbarTicker(c.close, chg);
+    }
+  } catch (err) {
+    // If update() fails due to out-of-order time, fallback to full safe slice render
+    renderReplaySlice(replay.idx);
   }
 }
 
@@ -218,7 +285,7 @@ function beginReplay(startIdx) {
 
   const scrubber = document.getElementById("rp-scrubber");
   scrubber.min = 0;
-  scrubber.max = baseCandles.length - 1 - startIdx;
+  scrubber.max = Math.max(1, baseCandles.length - 1 - startIdx);
   scrubber.value = 0;
 
   document.getElementById("rp-time-end").textContent = fmtDate(baseCandles[baseCandles.length - 1].time);
@@ -228,13 +295,7 @@ function beginReplay(startIdx) {
 }
 
 function buildReplayChart(upToIdx) {
-  const visible = baseCandles.slice(0, upToIdx + 1);
-  if (activeTF > baseTF) {
-    const agg = aggregateCandles(visible, activeTF, activeTFType);
-    renderChart(agg, true);
-  } else {
-    renderChart(visible, true);
-  }
+  renderReplaySlice(upToIdx);
   requestAnimationFrame(() => {
     chart.timeScale().scrollToPosition(8, false);
   });
@@ -244,20 +305,32 @@ function rpStep(dir) {
   const newIdx = replay.idx + dir;
   if (newIdx < replay.startIdx) return;
   if (newIdx >= baseCandles.length) { rpPause(); return; }
+
+  const prevIdx = replay.idx;
   replay.idx = newIdx;
   const c = baseCandles[newIdx];
-  if (dir > 0) evalTradeSimLogic(c);
-  _updateReplaySeries();
+
+  if (dir > 0) {
+    evalTradeSimLogic(c);
+    if (typeof playSound === "function") playSound("tick");
+    _updateReplaySeries();
+  } else {
+    // Stepping backwards: re-render slice cleanly
+    renderReplaySlice(newIdx);
+    updateSimUI(c ? c.close : null);
+  }
   rpUpdateUI();
 }
 
 function rpUpdateUI() {
   const idx = replay.idx;
   const c = baseCandles[idx];
+  if (!c) return;
   const scrubber = document.getElementById("rp-scrubber");
   const val = idx - replay.startIdx;
   scrubber.value = val;
-  const pct = ((val / (baseCandles.length - 1 - replay.startIdx)) * 100).toFixed(1);
+  const maxVal = Math.max(1, baseCandles.length - 1 - replay.startIdx);
+  const pct = Math.min(100, Math.max(0, (val / maxVal) * 100)).toFixed(1);
   scrubber.style.background = `linear-gradient(to right, var(--accent) ${pct}%, var(--border) ${pct}%)`;
   document.getElementById("rp-time-cur").textContent = fmtDate(c.time);
 }
@@ -272,31 +345,45 @@ function rpPlay() {
   document.getElementById("rp-play").textContent = "⏸";
   document.getElementById("rp-play").classList.add("playing");
 
-  const msPerCandle = () => 600 / replay.speed;
+  const msPerCandle = () => Math.max(20, 500 / replay.speed);
   replay.lastTick = performance.now();
   replay.accumulated = 0;
 
   const tick = (now) => {
     if (!replay.playing) return;
-    const delta = now - replay.lastTick;
-    replay.lastTick = now;
-    replay.accumulated = (replay.accumulated || 0) + delta;
-    const mpc = msPerCandle();
-    let advanced = 0;
-    while (replay.accumulated >= mpc && advanced < 10) {
-      replay.accumulated -= mpc;
-      advanced++;
-      if (replay.idx >= baseCandles.length - 1) {
-        replay.idx = baseCandles.length - 1;
-        rpPause();
-        break;
+    try {
+      const delta = now - replay.lastTick;
+      replay.lastTick = now;
+      replay.accumulated = (replay.accumulated || 0) + delta;
+      const mpc = msPerCandle();
+      let advanced = 0;
+
+      while (replay.accumulated >= mpc && advanced < 15) {
+        replay.accumulated -= mpc;
+        advanced++;
+        if (replay.idx >= baseCandles.length - 1) {
+          replay.idx = baseCandles.length - 1;
+          rpPause();
+          break;
+        }
+        replay.idx++;
+        evalTradeSimLogic(baseCandles[replay.idx]);
       }
-      replay.idx++;
-      evalTradeSimLogic(baseCandles[replay.idx]);
-      _updateReplaySeries();
+
+      if (replay.accumulated > mpc * 15) replay.accumulated = 0;
+
+      if (advanced > 0) {
+        if (advanced > 1 || activeTF > baseTF) {
+          renderReplaySlice(replay.idx);
+        } else {
+          _updateReplaySeries();
+        }
+        rpUpdateUI();
+      }
+    } catch (err) {
+      console.warn("Replay tick error:", err);
     }
-    if (replay.accumulated > mpc * 10) replay.accumulated = 0;
-    if (advanced > 0) rpUpdateUI();
+
     if (replay.playing) {
       replay.rafId = requestAnimationFrame(tick);
     }
@@ -367,6 +454,11 @@ function exitReplay() {
   if (container._replayCrosshairHandler) {
     chart.unsubscribeCrosshairMove(container._replayCrosshairHandler);
     container._replayCrosshairHandler = null;
+  }
+
+  // If live WebSocket was paused, resume it
+  if (typeof resumeLiveStream === "function") {
+    resumeLiveStream();
   }
 
   renderChart(baseCandles, true);

@@ -194,19 +194,18 @@ function aggregateCandles(candles, tfSec, tfType) {
 
 function buildTFButtons(candles) {
   baseTF = detectBaseTF(candles);
-  activeTF = baseTF;
-  baseFlatTimes = null;
-  _indicatorCache.clear();
+  activeTF = activeTF || baseTF;
   const grp = document.getElementById("tf-group");
   grp.innerHTML = "";
 
-  const currentTfDef = TF_DEFS.find((t) => t.s === baseTF) || TF_DEFS[0];
+  const currentTfDef = TF_DEFS.find((t) => t.s === activeTF) || TF_DEFS.find((t) => t.s === baseTF) || TF_DEFS[0];
   document.getElementById("label-active-tf").textContent = currentTfDef.label;
 
   TF_DEFS.forEach((tf) => {
-    if (tf.s < baseTF) return;
+    const isLive = typeof _isLiveConnected !== "undefined" && _isLiveConnected;
+    if (!isLive && tf.s < baseTF) return;
     const btn = document.createElement("div");
-    btn.className = "tv-dropdown-item" + (tf.s === baseTF ? " active" : "");
+    btn.className = "tv-dropdown-item" + (tf.s === activeTF ? " active" : "");
     btn.textContent = tf.label;
     btn.onclick = () => {
       switchTF(tf.s, tf.tfType, btn);
@@ -226,6 +225,20 @@ function switchTF(tfSec, tfType, btn) {
 
   const tfDef = TF_DEFS.find((t) => t.s === tfSec);
   if (tfDef) document.getElementById("label-active-tf").textContent = tfDef.label;
+
+  if (typeof replay !== "undefined" && replay.active) {
+    if (typeof renderReplaySlice === "function") {
+      renderReplaySlice(replay.idx);
+      requestAnimationFrame(() => requestAnimationFrame(drawRedraw));
+    }
+    return;
+  }
+
+  // If connected to a live Deriv or Binance feed, reload exact TF candles
+  if (typeof _isLiveConnected !== "undefined" && _isLiveConnected && typeof connectMarketPair === "function" && currentSymbol) {
+    connectMarketPair(currentSymbol);
+    return;
+  }
 
   const setStatusAgg = (label) => {
     document.getElementById("status-dot").style.background = "var(--yellow)";

@@ -185,23 +185,41 @@ function updateTradeHistoryPanel() {
   const totalPnl = history.reduce((s, t) => s + t.pnl, 0);
   const best = count ? Math.max(...history.map(t => t.pnl)) : null;
 
-  // Drawdown analysis
+  // Drawdown analysis & Max Run-up
   let maxDrawdown = 0, peak = 0, cumulative = 0;
+  let maxRunup = 0, trough = 0;
   history.forEach(t => {
     cumulative += t.pnl;
     peak = Math.max(peak, cumulative);
     maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
+    trough = Math.min(trough, cumulative);
+    maxRunup = Math.max(maxRunup, cumulative - trough);
   });
 
   // Avg win/loss ratio
   const avgWin = wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-  const avgLoss = losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0;
+  const avgLoss = losses.length ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0)) / losses.length : 0;
   const wlRatio = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : (avgWin > 0 ? 999 : 0);
+
+  // Expectancy (Espérance mathématique par trade)
+  const winRate = count ? wins.length / count : 0;
+  const lossRate = count ? losses.length / count : 0;
+  const expectancy = count ? ((winRate * avgWin) - (lossRate * avgLoss)) : 0;
+
+  // Sharpe Ratio estimation
+  let sharpe = "—";
+  if (count >= 3) {
+    const returns = history.map(t => t.pnl / (tradeSim.balance || 10000));
+    const meanR = returns.reduce((a, b) => a + b, 0) / count;
+    const variance = returns.reduce((a, b) => a + Math.pow(b - meanR, 2), 0) / (count - 1);
+    const stdDev = Math.sqrt(variance);
+    if (stdDev > 0) sharpe = ((meanR / stdDev) * Math.sqrt(252)).toFixed(2);
+  }
 
   // Profit factor
   const totalWins = wins.reduce((s, t) => s + t.pnl, 0);
   const totalLossesAbs = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
-  const pf = totalLossesAbs > 0 ? (totalWins / totalLossesAbs).toFixed(2) : "∞";
+  const pf = totalLossesAbs > 0 ? (totalWins / totalLossesAbs).toFixed(2) : (totalWins > 0 ? "∞" : "—");
 
   // Max consecutive losses
   let maxStreak = 0, curStreak = 0;
@@ -224,6 +242,11 @@ function updateTradeHistoryPanel() {
   const streakEl = document.getElementById("th-streak");
   if (streakEl) streakEl.textContent = count ? maxStreak : "—";
 
+  const expEl = document.getElementById("th-expectancy");
+  if (expEl) expEl.textContent = count ? `${expectancy >= 0 ? "+" : ""}$${expectancy.toFixed(2)}` : "—";
+  const sharpeEl = document.getElementById("th-sharpe");
+  if (sharpeEl) sharpeEl.textContent = sharpe;
+
   drawEquityCurve(history);
 
   const list = document.getElementById("th-list");
@@ -238,11 +261,213 @@ function updateTradeHistoryPanel() {
       <span class="th-badge ${t.type === "LONG" ? "long" : "short"}">${t.type}</span>
       <div class="th-trade-info">
         <div class="th-trade-price">E: ${fmt(t.entry)} → X: ${fmt(t.exit)}</div>
-        <div style="font-size:9px;color:var(--text-muted);margin-top:1px;">${t.reason}</div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:1px;">${t.reason} • Qty: ${(t.qty || 1).toFixed(2)}</div>
       </div>
       <span class="th-trade-pnl ${pnlSign}">${pnlTxt}</span>
     </div>`;
   }).join("");
+}
+
+// ── DATASETS & SESSIONS MODAL ─────────────────────────────
+let _activeDataModalTab = "datasets";
+
+function openDatasetsModal(tab = "datasets") {
+  _activeDataModalTab = tab;
+  const modal = document.getElementById("datasets-modal");
+  renderDatasetsModalContent();
+  if (modal) modal.classList.add("open");
+}
+
+function closeDatasetsModal() {
+  const modal = document.getElementById("datasets-modal");
+  if (modal) modal.classList.remove("open");
+}
+
+async function renderDatasetsModalContent() {
+  const listEl = document.getElementById("datasets-list");
+  if (!listEl) return;
+
+  const headerTabs = `
+    <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:10px;">
+      <button class="btn-sm ${_activeDataModalTab === 'datasets' ? 'btn-primary' : ''}" 
+              onclick="_activeDataModalTab = 'datasets'; renderDatasetsModalContent();">
+        📊 Datasets CSV/Live
+      </button>
+      <button class="btn-sm ${_activeDataModalTab === 'sessions' ? 'btn-primary' : ''}" 
+              onclick="_activeDataModalTab = 'sessions'; renderDatasetsModalContent();">
+        💾 Sessions Sauvegardées
+      </button>
+      <button class="btn-sm" style="margin-left:auto;" onclick="promptSaveSession()">
+        + Sauvegarder Session
+      </button>
+    </div>
+  `;
+
+  if (_activeDataModalTab === "sessions") {
+    if (typeof dbListSessions !== "function") {
+      listEl.innerHTML = headerTabs + '<div class="th-empty">IndexedDB non disponible</div>';
+      return;
+    }
+    const sessions = await dbListSessions();
+    if (!sessions.length) {
+      listEl.innerHTML = headerTabs + `
+        <div class="th-empty" style="padding:24px 10px;">
+          <div>Aucune session sauvegardée</div>
+          <button class="btn-sm btn-primary" style="margin-top:10px;" onclick="promptSaveSession()">Sauvegarder l'état actuel</button>
+        </div>
+      `;
+      return;
+    }
+    listEl.innerHTML = headerTabs + sessions.map(s => {
+      const dStr = new Date(s.updatedAt).toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      const pnlColor = s.totalPnl >= 0 ? "var(--bull)" : "var(--bear)";
+      const pnlSign = s.totalPnl >= 0 ? "+" : "";
+      return `
+        <div class="dataset-item-row" style="margin-bottom:8px;">
+          <div class="dataset-item-info">
+            <span class="dataset-item-title">${s.name} <span style="font-size:11px;color:var(--text-muted);font-weight:normal;">(${s.symbol})</span></span>
+            <span class="dataset-item-meta">
+              ${s.tradeCount} trades • P&L: <strong style="color:${pnlColor}">${pnlSign}$${s.totalPnl.toFixed(2)}</strong> • ${s.drawingsCount} dessins • ${dStr}
+            </span>
+          </div>
+          <div class="dataset-item-actions">
+            <button class="btn-sm btn-primary" onclick="loadSavedSession('${s.id}')">Ouvrir</button>
+            <button class="btn-sm" onclick="exportSavedSession('${s.id}')" title="Exporter JSON">📤</button>
+            <button class="btn-sm btn-danger" onclick="deleteSavedSession('${s.id}')" title="Supprimer">🗑️</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+    return;
+  }
+
+  // Datasets tab
+  if (typeof dbListDatasets !== "function") {
+    listEl.innerHTML = headerTabs + '<div class="th-empty">IndexedDB non disponible</div>';
+    return;
+  }
+  const datasets = await dbListDatasets();
+  if (!datasets.length) {
+    listEl.innerHTML = headerTabs + '<div class="th-empty">Aucun jeu de données sauvegardé</div>';
+    return;
+  }
+  listEl.innerHTML = headerTabs + datasets.map(ds => {
+    const dStr = new Date(ds.updatedAt).toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    return `
+      <div class="dataset-item-row" style="margin-bottom:8px;">
+        <div class="dataset-item-info">
+          <span class="dataset-item-title">${ds.symbol}</span>
+          <span class="dataset-item-meta">${ds.candleCount.toLocaleString()} bougies • ${dStr}</span>
+        </div>
+        <div class="dataset-item-actions">
+          <button class="btn-sm btn-primary" onclick="loadSavedDataset('${ds.id}')">Charger</button>
+          <button class="btn-sm btn-danger" onclick="deleteSavedDataset('${ds.id}')">🗑️</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function promptSaveSession() {
+  const defaultName = `${currentSymbol} — ${new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`;
+  const name = prompt("Nom de la session :", defaultName);
+  if (!name) return;
+
+  const id = `sess_${Date.now()}`;
+  await dbSaveSession({ id, name });
+  showToast(`Session "${name}" sauvegardée !`, "success", 2500);
+  _activeDataModalTab = "sessions";
+  await renderDatasetsModalContent();
+}
+
+async function loadSavedSession(id) {
+  if (typeof dbLoadSession !== "function") return;
+  const sess = await dbLoadSession(id);
+  if (!sess) {
+    showToast("Session introuvable", "error");
+    return;
+  }
+
+  if (sess.activeDatasetId) {
+    const ds = await dbGetDataset(sess.activeDatasetId);
+    if (ds && ds.candles) {
+      baseCandles = ds.candles;
+      allCandles = ds.candles;
+      sortedTimes = ds.candles.map(c => c.time);
+      baseTF = ds.baseTF || detectBaseTF(ds.candles);
+    }
+  }
+
+  currentSymbol = sess.symbol || currentSymbol;
+  document.getElementById("symbol-input").value = currentSymbol;
+  document.getElementById("ticker-symbol").textContent = currentSymbol;
+
+  drawings = sess.drawings || [];
+  if (sess.tradeSim) {
+    tradeSim.balance = sess.tradeSim.balance || 10000;
+    tradeSim.positions = sess.tradeSim.positions || [];
+    tradeSim.pendingOrders = sess.tradeSim.pendingOrders || [];
+    tradeSim.history = sess.tradeSim.history || [];
+    document.getElementById("rp-balance").textContent = formatMoney(tradeSim.balance);
+    _updateAllTradeMarkers();
+  }
+
+  renderChart(allCandles.length ? allCandles : baseCandles, true);
+  fitContent();
+  drawRedraw();
+  updateTradeHistoryPanel();
+  closeDatasetsModal();
+  showToast(`Session "${sess.name || sess.symbol}" restaurée`, "success", 2500);
+}
+
+async function deleteSavedSession(id) {
+  if (!confirm("Supprimer cette session ?")) return;
+  if (typeof dbDeleteSession !== "function") return;
+  await dbDeleteSession(id);
+  await renderDatasetsModalContent();
+  showToast("Session supprimée", "info", 1500);
+}
+
+async function exportSavedSession(id) {
+  if (typeof dbLoadSession !== "function") return;
+  const sess = await dbLoadSession(id);
+  if (!sess) return;
+  const blob = new Blob([JSON.stringify(sess, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tradeview_session_${sess.symbol}_${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("Session exportée en JSON", "success", 2000);
+}
+
+async function loadSavedDataset(id) {
+  if (typeof dbGetDataset !== "function") return;
+  const ds = await dbGetDataset(id);
+  if (!ds || !ds.candles.length) {
+    showToast("Jeu de données introuvable ou vide", "error");
+    return;
+  }
+  currentSymbol = ds.symbol;
+  document.getElementById("symbol-input").value = ds.symbol;
+  document.getElementById("ticker-symbol").textContent = ds.symbol;
+  baseCandles = ds.candles;
+  allCandles = ds.candles;
+  sortedTimes = ds.candles.map(c => c.time);
+  baseTF = ds.baseTF || detectBaseTF(ds.candles);
+  window._currentDatasetId = ds.id;
+  renderChart(ds.candles, true);
+  fitContent();
+  closeDatasetsModal();
+  showToast(`Dataset ${ds.symbol} chargé (${ds.candles.length.toLocaleString()} bougies)`, "success", 2500);
+}
+
+async function deleteSavedDataset(id) {
+  if (typeof dbDeleteDataset !== "function") return;
+  await dbDeleteDataset(id);
+  await renderDatasetsModalContent();
+  showToast("Dataset supprimé", "info", 1500);
 }
 
 function drawEquityCurve(history) {

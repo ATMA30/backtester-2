@@ -82,7 +82,7 @@ function initChart() {
     visible: showVolume,
   });
   chart.priceScale("volume").applyOptions({
-    scaleMargins: { top: 0.82, bottom: 0 },
+    scaleMargins: { top: 0.88, bottom: 0 },
   });
 
   if (!showGrid) {

@@ -367,6 +367,11 @@ function _parseCSVMainThread(file, dateCol, timeCol, openCol, highCol, lowCol, c
       sortedTimes = dedup.map((c) => c.time);
       buildTFButtons(dedup);
       renderChart(dedup, true);
+      if (typeof dbSaveDataset === "function") {
+        dbSaveDataset({ symbol: currentSymbol, name: currentSymbol, candles: dedup, baseTF }).then(ds => {
+          window._currentDatasetId = ds.id;
+        });
+      }
       document.getElementById("welcome-overlay").style.display = "none";
       document.getElementById("status-dot").className = "status-dot green";
       document.getElementById("status-text").textContent =
@@ -514,6 +519,11 @@ function importData() {
         }
 
         renderChart(displayed, true);
+        if (typeof dbSaveDataset === "function") {
+          dbSaveDataset({ symbol: currentSymbol, name: currentSymbol, candles: baseCandles, baseTF }).then(ds => {
+            window._currentDatasetId = ds.id;
+          });
+        }
         document.getElementById("welcome-overlay").style.display = "none";
         document.getElementById("status-dot").className = "status-dot green";
         const suffix = autoTFLabel ? ` (affiché en ${autoTFLabel})` : "";
