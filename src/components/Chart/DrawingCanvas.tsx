@@ -91,7 +91,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const dragHandleRef = useRef<{ drawingId: string; ptIdx: number } | null>(null);
   const dragBodyRef = useRef<{ drawingId: string; startPts: Point[]; startMouse: { x: number; y: number } } | null>(null);
   const dragTradeRef = useRef<{
-    type: 'ACTIVE_SL' | 'ACTIVE_TP' | 'PENDING_TARGET' | 'PENDING_SL' | 'PENDING_TP';
+    type: 'ACTIVE_SL' | 'ACTIVE_TP' | 'PENDING_TARGET' | 'PENDING_SL' | 'PENDING_TP' | 'PULL_ACTIVE' | 'PULL_PENDING';
     orderId?: string;
   } | null>(null);
   const [isCtrlDown, setIsCtrlDown] = useState(false);
@@ -218,7 +218,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     const n = times.length;
     const barSpacing = getBarSpacingPx();
-    const currentTF = activeTF || baseTF || 60;
+    const currentTF = (activeTF || baseTF || 60) * 60;
 
     let time = ts.coordinateToTime(x) as number | null;
 
@@ -232,36 +232,35 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           time = Math.round(lastTime + barsOff * currentTF);
         }
       }
+    }
 
-      if (time === null || time === undefined) {
-        const firstTime = times[0];
-        const firstX = ts.timeToCoordinate(firstTime as any);
-        if (firstX !== null && firstX !== undefined && barSpacing > 0.01) {
-          const barsOff = (x - firstX) / barSpacing;
-          if (barsOff < 0) {
-            time = Math.round(firstTime + barsOff * currentTF);
+    // Ctrl key: magnet snap to nearest OHLC
+    if (isCtrlDown && displayCandles.length > 0) {
+      let nearest: (typeof displayCandles)[0] | null = null;
+      let minXDist = Infinity;
+      for (const c of displayCandles) {
+        const cx = chart.timeScale().timeToCoordinate(c.time as any);
+        if (cx !== null) {
+          const dist = Math.abs(cx - x);
+          if (dist < minXDist) {
+            minXDist = dist;
+            nearest = c;
           }
         }
       }
-
-      if (time === null || time === undefined) {
-        time = lastTime;
-      }
-    }
-
-    // Snap to OHLC if Ctrl key is held
-    if (isCtrlDown && displayCandles.length > 0) {
-      const targetTime = time;
-      const nearestCandle = displayCandles.find((c) => Math.abs(c.time - targetTime) <= currentTF);
-      if (nearestCandle) {
-        const ohlc = [nearestCandle.open, nearestCandle.high, nearestCandle.low, nearestCandle.close];
-        let bestDist = Infinity;
+      if (nearest && minXDist < 30) {
+        time = nearest.time;
+        const ohlc = [nearest.open, nearest.high, nearest.low, nearest.close];
         let bestPrice = price;
+        let minYDist = Infinity;
         for (const p of ohlc) {
-          const dist = Math.abs(p - price);
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestPrice = p;
+          const py = mainSeries.priceToCoordinate(p);
+          if (py !== null) {
+            const dist = Math.abs(py - y);
+            if (dist < minYDist) {
+              minYDist = dist;
+              bestPrice = p;
+            }
           }
         }
         price = bestPrice;
@@ -285,6 +284,17 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       if (entryY !== null && entryY !== undefined) {
         if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - entryY) < 14) {
           return { action: 'CLOSE_ACTIVE' as const };
+        }
+
+        // Quick "+TP" chip button
+        if (!activePosition.tp && mx >= width - 68 && mx <= width - 40 && Math.abs(my - entryY) < 14) {
+          return { action: 'ADD_ACTIVE_TP' as const };
+        }
+
+        // Quick "+SL" chip button
+        const slChipRight = !activePosition.tp ? width - 72 : width - 40;
+        if (!activePosition.sl && mx >= slChipRight - 28 && mx <= slChipRight && Math.abs(my - entryY) < 14) {
+          return { action: 'ADD_ACTIVE_SL' as const };
         }
       }
 
@@ -315,6 +325,13 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           return { action: 'DRAG' as const, type: 'ACTIVE_TP' as const };
         }
       }
+
+      // Drag Entry Line directly to pull SL or TP out of the entry line!
+      if (entryY !== null && entryY !== undefined) {
+        if (Math.abs(my - entryY) < 12) {
+          return { action: 'DRAG' as const, type: 'PULL_ACTIVE' as const };
+        }
+      }
     }
 
     // 2. Pending Orders
@@ -328,6 +345,17 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         if (orderY !== null && orderY !== undefined) {
           if (mx >= width - 36 && mx <= width - 8 && Math.abs(my - orderY) < 14) {
             return { action: 'CANCEL_PENDING' as const, orderId: o.id };
+          }
+
+          // Quick "+TP" chip
+          if (!o.tp && mx >= width - 68 && mx <= width - 40 && Math.abs(my - orderY) < 14) {
+            return { action: 'ADD_PENDING_TP' as const, orderId: o.id };
+          }
+
+          // Quick "+SL" chip
+          const slChipRight = !o.tp ? width - 72 : width - 40;
+          if (!o.sl && mx >= slChipRight - 28 && mx <= slChipRight && Math.abs(my - orderY) < 14) {
+            return { action: 'ADD_PENDING_SL' as const, orderId: o.id };
           }
         }
 
@@ -359,10 +387,10 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           }
         }
 
-        // Drag Target Price line
+        // Drag Target Price line or pull SL/TP from target line
         if (orderY !== null && orderY !== undefined) {
           if (Math.abs(my - orderY) < 12) {
-            return { action: 'DRAG' as const, type: 'PENDING_TARGET' as const, orderId: o.id };
+            return { action: 'DRAG' as const, type: 'PULL_PENDING' as const, orderId: o.id };
           }
         }
       }
@@ -708,7 +736,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         ctx.stroke();
 
         // Main Entry Badge
-        const bw = 165;
+        const hasNoSl = !activePosition.sl;
+        const hasNoTp = !activePosition.tp;
+        const bw = 175 + (hasNoSl ? 34 : 0) + (hasNoTp ? 34 : 0);
         const bx = width - bw - 10;
         const by = entryY - 11;
         ctx.fillStyle = isLong ? 'rgba(0, 196, 110, 0.95)' : 'rgba(244, 63, 94, 0.95)';
@@ -721,12 +751,39 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
         ctx.fillText(`${isLong ? '▲ ACHAT' : '▼ VENTE'} ${activePosition.size}L @ ${activePosition.entry.toFixed(dec)}`, (bx + 6) * dpr, (entryY + 4) * dpr);
 
+        let chipOffset = 36;
         // Close Button [✕] inside badge
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-        ctx.fillRect((width - 32) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.fillRect((width - chipOffset) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
         ctx.fillStyle = '#FFFFFF';
         ctx.font = `bold ${11 * dpr}px sans-serif`;
-        ctx.fillText('✕', (width - 27) * dpr, (entryY + 4) * dpr);
+        ctx.fillText('✕', (width - chipOffset + 5) * dpr, (entryY + 4) * dpr);
+
+        // Optional "+TP" button chip if no TP
+        if (hasNoTp) {
+          chipOffset += 32;
+          ctx.fillStyle = 'rgba(0, 196, 110, 0.45)';
+          ctx.fillRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 0.8 * dpr;
+          ctx.strokeRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `bold ${8.5 * dpr}px JetBrains Mono, monospace`;
+          ctx.fillText('+TP', (width - chipOffset + 4) * dpr, (entryY + 4) * dpr);
+        }
+
+        // Optional "+SL" button chip if no SL
+        if (hasNoSl) {
+          chipOffset += 32;
+          ctx.fillStyle = 'rgba(244, 63, 94, 0.45)';
+          ctx.fillRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 0.8 * dpr;
+          ctx.strokeRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `bold ${8.5 * dpr}px JetBrains Mono, monospace`;
+          ctx.fillText('+SL', (width - chipOffset + 4) * dpr, (entryY + 4) * dpr);
+        }
       }
 
       if (slY !== null && slY !== undefined && activePosition.sl) {
@@ -813,7 +870,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.lineTo(width * dpr, orderY * dpr);
           ctx.stroke();
 
-          const bw = 180;
+          const hasNoSl = !order.sl;
+          const hasNoTp = !order.tp;
+          const bw = 185 + (hasNoSl ? 34 : 0) + (hasNoTp ? 34 : 0);
           const bx = width - bw - 10;
           const by = orderY - 11;
           ctx.fillStyle = '#0284C7';
@@ -826,12 +885,37 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
           ctx.fillText(`⏳ ${isLong ? 'ACHAT' : 'VENTE'} ${order.orderType} @ ${order.targetPrice.toFixed(dec)}`, (bx + 6) * dpr, (orderY + 4) * dpr);
 
+          let chipOffset = 36;
           // Cancel Button [✕]
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-          ctx.fillRect((width - 32) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+          ctx.fillRect((width - chipOffset) * dpr, (by + 2) * dpr, 18 * dpr, 18 * dpr);
           ctx.fillStyle = '#FFFFFF';
           ctx.font = `bold ${11 * dpr}px sans-serif`;
-          ctx.fillText('✕', (width - 27) * dpr, (orderY + 4) * dpr);
+          ctx.fillText('✕', (width - chipOffset + 5) * dpr, (orderY + 4) * dpr);
+
+          if (hasNoTp) {
+            chipOffset += 32;
+            ctx.fillStyle = 'rgba(0, 196, 110, 0.45)';
+            ctx.fillRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 0.8 * dpr;
+            ctx.strokeRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = `bold ${8.5 * dpr}px JetBrains Mono, monospace`;
+            ctx.fillText('+TP', (width - chipOffset + 4) * dpr, (orderY + 4) * dpr);
+          }
+
+          if (hasNoSl) {
+            chipOffset += 32;
+            ctx.fillStyle = 'rgba(244, 63, 94, 0.45)';
+            ctx.fillRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 0.8 * dpr;
+            ctx.strokeRect((width - chipOffset) * dpr, (by + 2) * dpr, 28 * dpr, 18 * dpr);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = `bold ${8.5 * dpr}px JetBrains Mono, monospace`;
+            ctx.fillText('+SL', (width - chipOffset + 4) * dpr, (orderY + 4) * dpr);
+          }
         }
 
         if (slY !== null && slY !== undefined && order.sl) {
@@ -1237,8 +1321,48 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     // Check click / drag on Position / Pending Order Lines or Badges
     const tradeHit = hitTestTrade(mx, my);
     if (tradeHit) {
+      const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+
       if (tradeHit.action === 'CLOSE_ACTIVE') {
         closePosition('MANUAL');
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'ADD_ACTIVE_SL' && activePosition) {
+        const isLong = activePosition.type === 'LONG';
+        const newSl = isLong ? activePosition.entry - pip * 25 : activePosition.entry + pip * 25;
+        updateActivePositionSlTp(newSl, activePosition.tp);
+        dragTradeRef.current = { type: 'ACTIVE_SL' };
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'ADD_ACTIVE_TP' && activePosition) {
+        const isLong = activePosition.type === 'LONG';
+        const newTp = isLong ? activePosition.entry + pip * 50 : activePosition.entry - pip * 50;
+        updateActivePositionSlTp(activePosition.sl, newTp);
+        dragTradeRef.current = { type: 'ACTIVE_TP' };
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'ADD_PENDING_SL' && tradeHit.orderId) {
+        const o = pendingOrders.find((x) => x.id === tradeHit.orderId);
+        if (o) {
+          const isLong = o.type === 'LONG';
+          const newSl = isLong ? o.targetPrice - pip * 25 : o.targetPrice + pip * 25;
+          updatePendingOrder(o.id, { sl: newSl });
+          dragTradeRef.current = { type: 'PENDING_SL', orderId: o.id };
+        }
+        redraw();
+        return;
+      }
+      if (tradeHit.action === 'ADD_PENDING_TP' && tradeHit.orderId) {
+        const o = pendingOrders.find((x) => x.id === tradeHit.orderId);
+        if (o) {
+          const isLong = o.type === 'LONG';
+          const newTp = isLong ? o.targetPrice + pip * 50 : o.targetPrice - pip * 50;
+          updatePendingOrder(o.id, { tp: newTp });
+          dragTradeRef.current = { type: 'PENDING_TP', orderId: o.id };
+        }
         redraw();
         return;
       }
@@ -1445,6 +1569,26 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           validTp = Math.min(activePosition.entry - minDistance, pt.price);
         }
         updateActivePositionSlTp(activePosition.sl, validTp);
+      } else if (type === 'PULL_ACTIVE' && activePosition) {
+        const isLong = activePosition.type === 'LONG';
+        const delta = pt.price - activePosition.entry;
+        if (Math.abs(delta) >= minDistance) {
+          if (delta > 0) {
+            // Above entry: TP for LONG, SL for SHORT
+            if (isLong) {
+              updateActivePositionSlTp(activePosition.sl, Math.max(activePosition.entry + minDistance, pt.price));
+            } else {
+              updateActivePositionSlTp(Math.max(activePosition.entry + minDistance, pt.price), activePosition.tp);
+            }
+          } else {
+            // Below entry: SL for LONG, TP for SHORT
+            if (isLong) {
+              updateActivePositionSlTp(Math.min(activePosition.entry - minDistance, pt.price), activePosition.tp);
+            } else {
+              updateActivePositionSlTp(activePosition.sl, Math.min(activePosition.entry - minDistance, pt.price));
+            }
+          }
+        }
       } else if (type === 'PENDING_TARGET' && orderId) {
         updatePendingOrder(orderId, { targetPrice: pt.price });
       } else if (type === 'PENDING_SL' && orderId) {
@@ -1470,6 +1614,29 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             validTp = Math.min(order.targetPrice - minDistance, pt.price);
           }
           updatePendingOrder(orderId, { tp: validTp });
+        }
+      } else if (type === 'PULL_PENDING' && orderId) {
+        const order = pendingOrders.find((o) => o.id === orderId);
+        if (order) {
+          const isLong = order.type === 'LONG';
+          const delta = pt.price - order.targetPrice;
+          if (Math.abs(delta) >= minDistance) {
+            if (delta > 0) {
+              // Above target: TP for BUY, SL for SELL
+              if (isLong) {
+                updatePendingOrder(orderId, { tp: Math.max(order.targetPrice + minDistance, pt.price) });
+              } else {
+                updatePendingOrder(orderId, { sl: Math.max(order.targetPrice + minDistance, pt.price) });
+              }
+            } else {
+              // Below target: SL for BUY, TP for SELL
+              if (isLong) {
+                updatePendingOrder(orderId, { sl: Math.min(order.targetPrice - minDistance, pt.price) });
+              } else {
+                updatePendingOrder(orderId, { tp: Math.min(order.targetPrice - minDistance, pt.price) });
+              }
+            }
+          }
         }
       }
 
