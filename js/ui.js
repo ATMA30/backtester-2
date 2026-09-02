@@ -18,6 +18,24 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// ── FULLSCREEN / IMMERSION ─────────────────────────────────
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+    document.getElementById("btn-fullscreen")?.classList.add("active");
+    showToast("⛶ Mode Immersion plein écran activé", "info", 2000);
+  } else {
+    document.exitFullscreen().catch(() => {});
+    document.getElementById("btn-fullscreen")?.classList.remove("active");
+    showToast("Sortie du mode immersion", "info", 2000);
+  }
+}
+
+document.addEventListener("fullscreenchange", () => {
+  const isFull = !!document.fullscreenElement;
+  document.getElementById("btn-fullscreen")?.classList.toggle("active", isFull);
+});
+
 // ── TOAST ────────────────────────────────────────────────
 function showToast(msg, type = "info", duration = 4000) {
   const container = document.getElementById("toast-container");

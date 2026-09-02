@@ -24,7 +24,68 @@ function startReplayRandom() {
 
   const d = new Date(baseCandles[idx].time * 1000);
   const label = d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
-  showToast(`Replay aléatoire — départ ${label}`, "info", 3000);
+  showToast(`🎲 Replay aléatoire — départ ${label}`, "info", 3000);
+}
+
+function startReplayAtSession(sessionKey) {
+  if (!baseCandles || baseCandles.length < 20) {
+    showToast("Pas assez de données pour lancer un replay de session.", "warning");
+    return;
+  }
+  const targetHour = sessionKey === "london" ? 8 : sessionKey === "ny" ? 13 : 0;
+  
+  const n = baseCandles.length;
+  const maxIdx = Math.max(10, n - 100);
+  let matchedIdx = -1;
+  
+  for (let i = maxIdx; i >= 10; i--) {
+    const d = new Date(baseCandles[i].time * 1000);
+    if (d.getUTCHours() === targetHour) {
+      matchedIdx = i;
+      break;
+    }
+  }
+  
+  if (matchedIdx === -1) {
+    matchedIdx = Math.floor(n * 0.5);
+  }
+  
+  closeModal();
+  document.getElementById("btn-replay").classList.add("active");
+  document.getElementById("replay-hint").style.display = "none";
+  beginReplay(matchedIdx);
+  
+  const d = new Date(baseCandles[matchedIdx].time * 1000);
+  const label = d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  showToast(`🎯 Session ${sessionKey.toUpperCase()} — ancrage ${label} UTC`, "success", 3500);
+}
+
+function promptReplayDate() {
+  if (!baseCandles || baseCandles.length < 20) {
+    showToast("Pas d'historique disponible.", "warning");
+    return;
+  }
+  const minD = new Date(baseCandles[0].time * 1000).toISOString().slice(0, 10);
+  const maxD = new Date(baseCandles[baseCandles.length - 1].time * 1000).toISOString().slice(0, 10);
+  
+  const userInput = prompt(`Date de départ (entre ${minD} et ${maxD}) — format AAAA-MM-JJ :`, minD);
+  if (!userInput) return;
+  
+  const targetTime = new Date(userInput).getTime() / 1000;
+  if (isNaN(targetTime)) {
+    showToast("Date invalide.", "error");
+    return;
+  }
+  
+  const idx = snapIndexInBase(targetTime);
+  if (idx !== -1) {
+    closeModal();
+    document.getElementById("btn-replay").classList.add("active");
+    document.getElementById("replay-hint").style.display = "none";
+    beginReplay(idx);
+    const d = new Date(baseCandles[idx].time * 1000);
+    showToast(`🎯 Replay ancré au ${d.toLocaleDateString("fr-FR")}`, "success", 3000);
+  }
 }
 
 function startReplayMode() {
