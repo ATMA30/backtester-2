@@ -69,11 +69,57 @@ export const ALL_MARKET_PAIRS: MarketPair[] = [
   { symbol: 'DOGEUSDT', binanceSymbol: 'DOGEUSDT', label: 'DOGE / USDT (Dogecoin)', category: 'Crypto', decimals: 5, pip: 0.00001 },
 ];
 
+export function detectBaseTF(candles: Candle[]): number {
+  if (!candles || candles.length < 2) return 86400;
+  const counts: Record<number, number> = {};
+  const sampleLimit = Math.min(200, candles.length);
+  for (let i = 1; i < sampleLimit; i++) {
+    const dt = candles[i].time - candles[i - 1].time;
+    if (dt > 0) {
+      let closest = TIMEFRAME_DEFS[0].s;
+      let minDiff = Math.abs(dt - closest);
+      for (const tf of TIMEFRAME_DEFS) {
+        const diff = Math.abs(dt - tf.s);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = tf.s;
+        }
+      }
+      counts[closest] = (counts[closest] || 0) + 1;
+    }
+  }
+
+  let bestTF = 86400, maxCount = 0;
+  for (const [tfStr, count] of Object.entries(counts)) {
+    if (count > maxCount) {
+      maxCount = count;
+      bestTF = parseInt(tfStr, 10);
+    }
+  }
+  return bestTF;
+}
+
+export function getCalendarBucket(t: number, targetTF: number): number {
+  const d = new Date(t * 1000);
+  if (targetTF === 86400) {
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+  }
+  if (targetTF === 604800) {
+    const day = d.getUTCDay();
+    const diff = day === 0 ? 6 : day - 1;
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - diff) / 1000;
+  }
+  if (targetTF === 2592000) {
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000;
+  }
+  return Math.floor(t / targetTF) * targetTF;
+}
+
 export function aggregateCandles(candles: Candle[], targetTF: number, baseTF: number): Candle[] {
   if (targetTF <= baseTF || !candles.length) return candles;
   const groups = new Map<number, Candle[]>();
   for (const c of candles) {
-    const bucket = Math.floor(c.time / targetTF) * targetTF;
+    const bucket = getCalendarBucket(c.time, targetTF);
     if (!groups.has(bucket)) groups.set(bucket, []);
     groups.get(bucket)!.push(c);
   }
@@ -161,7 +207,7 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     });
   },
   setBaseCandles: (baseCandles, customBaseTF) => {
-    const baseTF = customBaseTF || 86400;
+    const baseTF = customBaseTF || detectBaseTF(baseCandles);
     const sortedTimes = baseCandles.map((c) => c.time);
     set({
       baseCandles,

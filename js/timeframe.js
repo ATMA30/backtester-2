@@ -4,15 +4,33 @@
 // ========================================================
 
 function detectBaseTF(candles) {
-  if (candles.length < 2) return 86400;
-  const diffs = [];
-  for (let i = 1; i < Math.min(20, candles.length); i++) {
-    const d = candles[i].time - candles[i - 1].time;
-    if (d > 0) diffs.push(d);
+  if (!candles || candles.length < 2) return 86400;
+  const counts = {};
+  const sampleLimit = Math.min(200, candles.length);
+  for (let i = 1; i < sampleLimit; i++) {
+    const dt = candles[i].time - candles[i - 1].time;
+    if (dt > 0) {
+      let closest = TF_DEFS[0].s;
+      let minDiff = Math.abs(dt - closest);
+      for (const tf of TF_DEFS) {
+        const diff = Math.abs(dt - tf.s);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = tf.s;
+        }
+      }
+      counts[closest] = (counts[closest] || 0) + 1;
+    }
   }
-  if (!diffs.length) return 86400;
-  diffs.sort((a, b) => a - b);
-  return diffs[0];
+
+  let bestTF = 86400, maxCount = 0;
+  for (const [tfStr, count] of Object.entries(counts)) {
+    if (count > maxCount) {
+      maxCount = count;
+      bestTF = parseInt(tfStr, 10);
+    }
+  }
+  return bestTF;
 }
 
 // ── AGG WORKER SOURCE ─────────────────────────────────────
@@ -30,28 +48,25 @@ self.onmessage = function(e) {
 
     function getBucket(t) {
         var dd = new Date(t * 1000);
-        if (tfSec === 86400) {
-            var day = dd.getUTCDay();
-            if (day === 0) {
-                return Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate() + 1) / 1000;
-            }
+        if (tfType === 'day' || tfSec === 86400) {
+            return Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate()) / 1000;
         }
-        if (tfType === 'week') {
+        if (tfType === 'week' || tfSec === 604800) {
             var day = dd.getUTCDay();
             var diff = (day === 0) ? 6 : day - 1;
             return Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate() - diff) / 1000;
         }
-        if (tfType === 'month') {
+        if (tfType === 'month' || tfSec === 2592000 || tfSec === 2678400) {
             return Date.UTC(dd.getUTCFullYear(), dd.getUTCMonth(), 1) / 1000;
         }
-        if (tfType === 'quarter') {
+        if (tfType === 'quarter' || tfSec === 7776000) {
             var q = Math.floor(dd.getUTCMonth() / 3);
             return Date.UTC(dd.getUTCFullYear(), q * 3, 1) / 1000;
         }
-        if (tfType === 'year') {
+        if (tfType === 'year' || tfSec === 31536000) {
             return Date.UTC(dd.getUTCFullYear(), 0, 1) / 1000;
         }
-        return Math.floor(t / tfSec) * tfSec;
+        return Math.floor(t / (tfSec || 60)) * (tfSec || 60);
     }
 
     if (!tfSec || tfSec <= baseTF) {
@@ -141,28 +156,26 @@ function ensureBaseFlat() {
 // ── CALENDAR-AWARE BUCKET ─────────────────────────────────
 function getCalendarBucket(t, tfType, tfSec) {
   const d = new Date(t * 1000);
-  if (tfSec === 86400) {
-    const day = d.getUTCDay();
-    if (day === 0) {
-      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) / 1000;
-    }
+  if (tfType === "day" || tfSec === 86400) {
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
   }
-  if (tfType === "week") {
-    const day = d.getUTCDay();
-    const diff = day === 0 ? 6 : day - 1;
+  if (tfType === "week" || tfSec === 604800) {
+    const day = d.getUTCDay(); // 0 is Sunday, 1 is Monday...
+    const diff = day === 0 ? 6 : day - 1; // days back to Monday
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - diff) / 1000;
   }
-  if (tfType === "month") {
+  if (tfType === "month" || tfSec === 2592000 || tfSec === 2678400) {
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000;
   }
-  if (tfType === "quarter") {
+  if (tfType === "quarter" || tfSec === 7776000) {
     const q = Math.floor(d.getUTCMonth() / 3);
     return Date.UTC(d.getUTCFullYear(), q * 3, 1) / 1000;
   }
-  if (tfType === "year") {
+  if (tfType === "year" || tfSec === 31536000) {
     return Date.UTC(d.getUTCFullYear(), 0, 1) / 1000;
   }
-  return Math.floor(t / tfSec) * tfSec;
+  const s = tfSec || 60;
+  return Math.floor(t / s) * s;
 }
 
 function aggregateCandles(candles, tfSec, tfType) {

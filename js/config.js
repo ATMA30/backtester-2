@@ -87,15 +87,15 @@ const DRAW_COLORS = {
 const IND_SWATCH_COLORS = ["#3B82F6","#00C46E","#F59E0B","#F2364A","#A855F7","#00D4FF","#FF8C00","#ffffff"];
 
 const TF_DEFS = [
-  { label: "1m",  s: 60,       tfType: "intraday" },
-  { label: "5m",  s: 300,      tfType: "intraday" },
-  { label: "15m", s: 900,      tfType: "intraday" },
-  { label: "30m", s: 1800,     tfType: "intraday" },
-  { label: "1H",  s: 3600,     tfType: "intraday" },
-  { label: "4H",  s: 14400,    tfType: "intraday" },
-  { label: "1D",  s: 86400,    tfType: "intraday" },
+  { label: "1m",  s: 60,       tfType: "minute"   },
+  { label: "5m",  s: 300,      tfType: "minute"   },
+  { label: "15m", s: 900,      tfType: "minute"   },
+  { label: "30m", s: 1800,     tfType: "minute"   },
+  { label: "1H",  s: 3600,     tfType: "hour"     },
+  { label: "4H",  s: 14400,    tfType: "hour"     },
+  { label: "1D",  s: 86400,    tfType: "day"      },
   { label: "1W",  s: 604800,   tfType: "week"     },
-  { label: "1M",  s: 2678400,  tfType: "month"    },
+  { label: "1M",  s: 2592000,  tfType: "month"    },
   { label: "3M",  s: 7776000,  tfType: "quarter"  },
   { label: "1Y",  s: 31536000, tfType: "year"     },
 ];

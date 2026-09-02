@@ -1577,24 +1577,53 @@ function drawForexSessions(W, H) {
   });
 }
 
+function getAutoSeparatorDef() {
+  const tf = activeTF || baseTF || 86400;
+  // TradingView standard automatic period separator hierarchy:
+  // - Intraday <= 15m (60s to 900s) -> Daily separators (1D)
+  // - Intraday 30m to 4h (1800s to 14400s) -> Weekly separators (1W)
+  // - Daily 1D (86400s) -> Monthly separators (1M)
+  // - Weekly 1W (604800s) -> Yearly separators (1Y)
+  // - Monthly 1M -> Yearly separators (1Y)
+  if (tf <= 900) return TF_DEFS.find(t => t.label === "1D") || { label: "1D", tfType: "day", s: 86400 };
+  if (tf <= 14400) return TF_DEFS.find(t => t.label === "1W") || { label: "1W", tfType: "week", s: 604800 };
+  if (tf <= 86400) return TF_DEFS.find(t => t.label === "1M") || { label: "1M", tfType: "month", s: 2592000 };
+  return TF_DEFS.find(t => t.label === "1Y") || { label: "1Y", tfType: "year", s: 31536000 };
+}
+
 function drawSeparators(W, H) {
   if (!separatorTF || !sortedTimes || !sortedTimes.length || !chart) return;
-  const { label: tfLabel, tfType, s } = separatorTF;
-  const palette = _SEP_COLORS[tfLabel] || { line: "rgba(130,148,210,0.28)", label: "rgba(150,170,230,0.55)" };
+
+  const activeSep = (separatorTF === "auto" || separatorTF === true) ? getAutoSeparatorDef() : separatorTF;
+  if (!activeSep) return;
+
+  const { label: tfLabel, tfType, s } = activeSep;
+  const palette = _SEP_COLORS[tfLabel] || { line: "rgba(130,148,210,0.32)", label: "rgba(150,170,230,0.65)" };
+
+  const ts = chart.timeScale();
+  const vr = ts.getVisibleRange();
+  if (!vr) return;
+
+  // Scan only visible index range (+ 1 bar margin)
+  let lo = 0, hi = sortedTimes.length - 1;
+  while (lo < hi - 1 && sortedTimes[lo + 1] < vr.from) lo++;
+  while (hi > lo + 1 && sortedTimes[hi - 1] > vr.to)   hi--;
+  const scanLo = Math.max(0, lo - 1);
+  const scanHi = Math.min(sortedTimes.length - 1, hi + 1);
 
   drawCtx.save();
   drawCtx.lineWidth = 1;
-  drawCtx.setLineDash([4, 6]);
-  drawCtx.font = "9px 'JetBrains Mono', monospace";
+  drawCtx.setLineDash([4, 5]);
+  drawCtx.font = "bold 9px 'JetBrains Mono', monospace";
   drawCtx.textBaseline = "top";
 
-  let lastBucket = getCalendarBucket(sortedTimes[0], tfType, s);
-  for (let i = 1; i < sortedTimes.length; i++) {
+  let lastBucket = getCalendarBucket(sortedTimes[scanLo], tfType, s);
+  for (let i = scanLo + 1; i <= scanHi; i++) {
     const bucket = getCalendarBucket(sortedTimes[i], tfType, s);
     if (bucket === lastBucket) continue;
     lastBucket = bucket;
 
-    const x = chart.timeScale().timeToCoordinate(sortedTimes[i]);
+    const x = ts.timeToCoordinate(sortedTimes[i]);
     if (x === null || x < 0 || x > W) continue;
 
     drawCtx.strokeStyle = palette.line;
@@ -1614,6 +1643,8 @@ function drawSeparators(W, H) {
 function setSeparatorTF(tfLabel) {
   if (tfLabel === null) {
     separatorTF = null;
+  } else if (tfLabel === "auto") {
+    separatorTF = "auto";
   } else {
     const tfd = TF_DEFS.find(t => t.label === tfLabel);
     separatorTF = tfd || null;
