@@ -389,23 +389,20 @@ export const TradingChart: React.FC = () => {
         const count = displayCandles.length;
         if (count > 0) {
           const currentLogical = chart.timeScale().getVisibleLogicalRange();
-          // Check if viewport is pointing into empty void (e.g. from a prior zoom before replay, or beyond data)
-          const isOutOfBounds =
+          // Truly out of bounds only if 100% of visible area contains zero candles (completely in empty void)
+          const isCompletelyEmpty =
             !currentLogical ||
             currentLogical.from >= count ||
-            currentLogical.to <= 0 ||
-            currentLogical.to > count + 25 ||
-            isReplayJustStarted ||
-            isReplayJump;
+            currentLogical.to <= 0;
 
-          if (isOutOfBounds) {
+          if (isReplayJustStarted || isReplayJump || isCompletelyEmpty) {
             lastVisibleRangeRef.current = null;
             chart.timeScale().setVisibleLogicalRange({
               from: Math.max(0, count - 65),
               to: count + 8,
             });
-          } else if (currentLogical.to <= count + 1) {
-            // Auto-advance view as replay plays forward
+          } else if (currentLogical && currentLogical.to <= count + 1) {
+            // Auto-advance view as replay plays forward while strictly preserving the user's zoom level (span)!
             const span = currentLogical.to - currentLogical.from;
             chart.timeScale().setVisibleLogicalRange({
               from: count - span + 6,

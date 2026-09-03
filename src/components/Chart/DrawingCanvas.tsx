@@ -262,7 +262,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     const n = times.length;
     const barSpacing = getBarSpacingPx();
-    const currentTF = (activeTF || baseTF || 60) * 60;
+    const currentTF = activeTF || baseTF || 60;
 
     let time = ts.coordinateToTime(x) as number | null;
 
@@ -272,8 +272,13 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
       if (lastX !== null && lastX !== undefined && barSpacing > 0.01) {
         const barsOff = (x - lastX) / barSpacing;
-        if (barsOff > 0) {
-          time = Math.round(lastTime + barsOff * currentTF);
+        time = Math.round(lastTime + barsOff * currentTF);
+      } else {
+        const firstTime = times[0];
+        const firstX = ts.timeToCoordinate(firstTime as any);
+        if (firstX !== null && firstX !== undefined && barSpacing > 0.01) {
+          const barsBefore = (firstX - x) / barSpacing;
+          time = Math.round(firstTime - barsBefore * currentTF);
         }
       }
     }
