@@ -385,13 +385,34 @@ export const TradingChart: React.FC = () => {
       });
 
       // Viewport Control
-      if (isReplayJustStarted || isReplayJump) {
-        // Focus directly on the latest replay candles with space to the right
+      if (isReplayActive) {
         const count = displayCandles.length;
-        chart.timeScale().setVisibleLogicalRange({
-          from: Math.max(0, count - 75),
-          to: count + 12,
-        });
+        if (count > 0) {
+          const currentLogical = chart.timeScale().getVisibleLogicalRange();
+          // Check if viewport is pointing into empty void (e.g. from a prior zoom before replay, or beyond data)
+          const isOutOfBounds =
+            !currentLogical ||
+            currentLogical.from >= count ||
+            currentLogical.to <= 0 ||
+            currentLogical.to > count + 25 ||
+            isReplayJustStarted ||
+            isReplayJump;
+
+          if (isOutOfBounds) {
+            lastVisibleRangeRef.current = null;
+            chart.timeScale().setVisibleLogicalRange({
+              from: Math.max(0, count - 65),
+              to: count + 8,
+            });
+          } else if (currentLogical.to <= count + 1) {
+            // Auto-advance view as replay plays forward
+            const span = currentLogical.to - currentLogical.from;
+            chart.timeScale().setVisibleLogicalRange({
+              from: count - span + 6,
+              to: count + 6,
+            });
+          }
+        }
       } else if (isTFChange && savedRange && savedRange.from && savedRange.to) {
         // Preserve viewport across TF switches
         try {
@@ -483,6 +504,7 @@ export const TradingChart: React.FC = () => {
     if (time) {
       const idx = baseCandles.findIndex((c) => c.time >= time);
       const chosenIdx = idx !== -1 ? idx : baseCandles.length - 20;
+      lastVisibleRangeRef.current = null;
       setStartIndex(chosenIdx);
       setCurrentIndex(chosenIdx);
       setIsPicking(false);

@@ -102,7 +102,7 @@ export const ReplayBar: React.FC = () => {
     stepBackward,
   } = useReplayStore();
 
-  const { baseCandles, setDisplayCandles, currentSymbol, activeTF, baseTF } = useMarketStore();
+  const { baseCandles, setDisplayCandles, currentSymbol, activeTF, baseTF, triggerFitContent } = useMarketStore();
   const {
     balance,
     activePosition,
@@ -351,6 +351,7 @@ export const ReplayBar: React.FC = () => {
             setIsPlaying(false);
             setIsActive(false);
             setDisplayCandles(baseCandles);
+            triggerFitContent();
           }}
           style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
         >
