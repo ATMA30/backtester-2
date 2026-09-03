@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ChevronDown,
   TrendingUp,
@@ -26,6 +26,7 @@ import {
   CalendarDays,
   CalendarRange,
   Slash,
+  Loader2,
 } from 'lucide-react';
 import { useMarketStore, TIMEFRAME_DEFS, detectBaseTF, ALL_MARKET_PAIRS } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
@@ -33,6 +34,7 @@ import { useUIStore } from '../../store/useUIStore';
 import { fetchHistoricalData } from '../../services/historicalApi';
 
 export const Topbar: React.FC = () => {
+  const [downloadingTF, setDownloadingTF] = useState<string | null>(null);
   const {
     currentSymbol,
     activeTF,
@@ -418,17 +420,42 @@ export const Topbar: React.FC = () => {
       {/* Right group: selectors + import */}
       <div className="topbar-right">
         {/* Timeframe picker */}
-        <div className="tv-dropdown">
+        <div className="tv-dropdown" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <button
             className="tv-dropdown-btn"
             id="btn-active-tf"
             onClick={() => toggleDropdown('tf')}
             style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
           >
-            <Clock size={12} strokeWidth={2} style={{ color: 'var(--text-secondary)' }} />
+            {downloadingTF ? (
+              <Loader2 size={12} style={{ color: '#38BDF8', animation: 'spin 1s linear infinite' }} />
+            ) : (
+              <Clock size={12} strokeWidth={2} style={{ color: 'var(--text-secondary)' }} />
+            )}
             <span>{currentTFDef.label}</span>
             <ChevronDown size={11} strokeWidth={2.5} />
           </button>
+
+          {downloadingTF && (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '3px 8px',
+                borderRadius: '4px',
+                background: 'rgba(56, 189, 248, 0.15)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                color: '#38BDF8',
+                fontSize: '11px',
+                fontWeight: 600,
+                animation: 'pulse 1.5s infinite',
+              }}
+            >
+              <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
+              <span>Chargement {downloadingTF}...</span>
+            </div>
+          )}
           {activeDropdown === 'tf' && (
             <div className="tv-dropdown-menu show" style={{ display: 'block', minWidth: '170px' }}>
               <div id="tf-group">
@@ -550,17 +577,28 @@ export const Topbar: React.FC = () => {
                           t.s <= 14400 ? '4h' : '1d';
 
                         closeAllDropdowns();
-                        showToast(
-                          prevCutTime
-                            ? `Recherche ${t.label} au moment précis du Replay (${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')})...`
-                            : `Téléchargement de ${currentSymbol} en ${t.label}...`,
-                          'info',
-                          3000
-                        );
+                        setDownloadingTF(t.label);
+
+                        if (t.s <= 60) {
+                          showToast(
+                            `⏳ Téléchargement du flux 1 minute (1m) pour ${currentSymbol} en cours... (~7 000 barres réelles)`,
+                            'info',
+                            5000
+                          );
+                        } else {
+                          showToast(
+                            prevCutTime
+                              ? `⏳ Recherche ${t.label} au moment précis du Replay (${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')})...`
+                              : `⏳ Téléchargement de ${currentSymbol} en ${t.label}...`,
+                            'info',
+                            3000
+                          );
+                        }
 
                         try {
                           const candles = await fetchHistoricalData(currentSymbol, tfCode, 'max', prevCutTime || undefined);
                           if (!candles || candles.length === 0) {
+                            setDownloadingTF(null);
                             showToast(`⚠️ Données ${t.label} indisponibles pour ${currentSymbol}`, 'warning', 3000);
                             return;
                           }
@@ -573,6 +611,7 @@ export const Topbar: React.FC = () => {
                             const firstDateStr = new Date(firstTime * 1000).toLocaleDateString('fr-FR');
 
                             if (prevCutTime < firstTime) {
+                              setDownloadingTF(null);
                               showToast(
                                 `⚠️ Archives intrajournalières insuffisantes : le flux ${t.label} de ${currentSymbol} démarre le ${firstDateStr}. Impossible de rejouer en ${t.label} au ${cutDateStr}. Le Replay reste en ${currentTFDef.label} (27 ans d'historique).`,
                                 'warning',
@@ -582,6 +621,7 @@ export const Topbar: React.FC = () => {
                             }
 
                             if (prevCutTime > lastTime) {
+                              setDownloadingTF(null);
                               showToast(
                                 `⚠️ Le flux ${t.label} s'arrête le ${new Date(lastTime * 1000).toLocaleDateString('fr-FR')}. Le Replay reste en ${currentTFDef.label}.`,
                                 'warning',
@@ -592,6 +632,7 @@ export const Topbar: React.FC = () => {
 
                             const newIdx = candles.findIndex((c) => c.time >= prevCutTime);
                             if (newIdx < 15) {
+                              setDownloadingTF(null);
                               showToast(
                                 `⚠️ Historique insuffisant avant le ${cutDateStr} en ${t.label} (seulement ${newIdx} bougies). Le Replay reste en ${currentTFDef.label}.`,
                                 'warning',
@@ -610,6 +651,7 @@ export const Topbar: React.FC = () => {
                               startIndex: newIdx,
                             });
 
+                            setDownloadingTF(null);
                             showToast(
                               `🟢 ${currentSymbol} (${t.label}) : synchronisé au moment précis du Replay (${cutDateStr}) !`,
                               'success',
@@ -622,12 +664,16 @@ export const Topbar: React.FC = () => {
                           setBaseCandles(candles, detectedTF);
                           setTimeframe(t.s >= detectedTF ? t.s : detectedTF);
 
+                          setDownloadingTF(null);
                           showToast(
-                            `🟢 ${currentSymbol} (${t.label}) : ${candles.length.toLocaleString()} barres prêtes pour le Replay`,
+                            t.s <= 60
+                              ? `🟢 Flux 1 minute (1m) prêt : ${candles.length.toLocaleString()} barres réelles chargées pour ${currentSymbol} !`
+                              : `🟢 ${currentSymbol} (${t.label}) : ${candles.length.toLocaleString()} barres prêtes pour le Replay`,
                             'success',
-                            3500
+                            4000
                           );
                         } catch (err) {
+                          setDownloadingTF(null);
                           console.warn('Dynamic TF download error:', err);
                           showToast(`Erreur lors du téléchargement en ${t.label}`, 'error', 3000);
                         }
