@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Search, Globe, X } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore, ALL_MARKET_PAIRS, detectBaseTF } from '../../store/useMarketStore';
+import { useReplayStore } from '../../store/useReplayStore';
 import { fetchHistoricalData } from '../../services/historicalApi';
 import { MarketPair } from '../../types/market';
 
@@ -83,6 +84,7 @@ export const LiveModal: React.FC = () => {
     setIsLoading(false);
 
     if (candles && candles.length > 0) {
+      useReplayStore.getState().resetReplay();
       const detectedTF = detectBaseTF(candles);
       setSymbol(pair.symbol);
       setBaseCandles(candles, detectedTF);

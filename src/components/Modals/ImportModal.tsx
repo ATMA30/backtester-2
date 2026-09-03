@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { UploadCloud, X, FileSpreadsheet } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore, detectBaseTF } from '../../store/useMarketStore';
+import { useReplayStore } from '../../store/useReplayStore';
 import { Candle } from '../../types/market';
 
 function parseTimestamp(val: any): number | null {
@@ -136,6 +137,7 @@ export const ImportModal: React.FC = () => {
             if (validCandles.length > 0) {
               validCandles.sort((a, b) => a.time - b.time);
               const btf = detectBaseTF(validCandles);
+              useReplayStore.getState().resetReplay();
               setSymbol(sym);
               setBaseCandles(validCandles, btf);
               setTimeframe(btf);
@@ -246,6 +248,7 @@ export const ImportModal: React.FC = () => {
     if (candles.length > 0) {
       const sym = symbolInput.trim() || fileName.replace(/\.[^/.]+$/, '').toUpperCase();
       const btf = detectBaseTF(candles);
+      useReplayStore.getState().resetReplay();
       setSymbol(sym);
       setBaseCandles(candles, btf);
       setTimeframe(btf);

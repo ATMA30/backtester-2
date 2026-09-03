@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Candle, MarketPair, TimeframeDef, ActiveIndicator, ForexSessionConfig, SeparatorTF } from '../types/market';
 import { useReplayStore } from './useReplayStore';
+import { useDrawingStore } from './useDrawingStore';
 import { saveDataset } from '../services/db';
 
 const SESSION_SETTINGS_KEY = 'tv_pro_session_settings';
@@ -189,6 +190,7 @@ interface MarketState {
   currentFitContentTrigger: number;
 
   dailyMasterCandles: Candle[];
+  dailyMasterMap: Record<string, Candle[]>;
   restoreDailyDataset: (targetTF?: number) => boolean;
   setSymbol: (symbol: string) => void;
   setTimeframe: (tfSec: number) => void;
@@ -215,6 +217,7 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   baseCandles: [],
   displayCandles: [],
   dailyMasterCandles: [],
+  dailyMasterMap: {},
   sortedTimes: [],
   isLiveConnected: false,
   historyRange: 'max',
@@ -239,7 +242,14 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   activeIndicators: [],
   currentFitContentTrigger: 0,
 
-  setSymbol: (symbol) => set({ currentSymbol: symbol }),
+  setSymbol: (symbol) => {
+    const prev = get().currentSymbol;
+    if (prev !== symbol) {
+      useReplayStore.getState().resetReplay();
+      useDrawingStore.getState().setActiveSymbol(symbol);
+    }
+    set({ currentSymbol: symbol });
+  },
   setTimeframe: (activeTF) => {
     const { baseCandles, baseTF } = get();
     if (!baseCandles.length) {
@@ -259,10 +269,41 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       sortedTimes: aggregated.map((c) => c.time),
     });
   },
-  setBaseCandles: (baseCandles, customBaseTF) => {
+  setBaseCandles: (rawCandles, customBaseTF) => {
+    if (!Array.isArray(rawCandles) || rawCandles.length === 0) return;
+
+    // 1. Strict sanitization: ensure clean numbers, normalize seconds, sort & deduplicate
+    const cleaned: Candle[] = [];
+    for (const c of rawCandles) {
+      if (!c || c.time == null || isNaN(Number(c.close))) continue;
+      let t = Math.floor(Number(c.time));
+      if (t > 2500000000) t = Math.floor(t / 1000); // convert milliseconds to seconds
+      if (t <= 0) continue;
+      cleaned.push({
+        time: t,
+        open: Number(c.open ?? c.close),
+        high: Number(c.high ?? c.close),
+        low: Number(c.low ?? c.close),
+        close: Number(c.close),
+        volume: Math.floor(Number(c.volume || 0)),
+      });
+    }
+    cleaned.sort((a, b) => a.time - b.time);
+
+    // Strict deduplication by timestamp:
+    const baseCandles: Candle[] = [];
+    for (const c of cleaned) {
+      if (baseCandles.length > 0 && baseCandles[baseCandles.length - 1].time === c.time) {
+        baseCandles[baseCandles.length - 1] = c;
+      } else {
+        baseCandles.push(c);
+      }
+    }
+
     const baseTF = customBaseTF || detectBaseTF(baseCandles);
     const sortedTimes = baseCandles.map((c) => c.time);
     const state = get();
+    const symbol = state.currentSymbol;
 
     const updatePayload: any = {
       baseCandles,
@@ -272,18 +313,20 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       activeTF: baseTF,
     };
 
-    // Protect master daily dataset in memory if this is a rich daily dataset (>= 500 bars)
+    // Protect master daily dataset in memory scoped strictly by symbol
+    const currentMap = state.dailyMasterMap || {};
     if (baseTF >= 86400 && baseCandles.length > 500) {
+      updatePayload.dailyMasterMap = { ...currentMap, [symbol]: baseCandles };
       updatePayload.dailyMasterCandles = baseCandles;
     }
 
     set(updatePayload);
 
+    // Auto-reset replay if replay is not actively playing
     if (!useReplayStore.getState().isActive) {
       useReplayStore.getState().resetReplay();
     }
 
-    const symbol = state.currentSymbol;
     const { historyRange } = state;
     // Do not overwrite a full 7,000-candle dataset in IndexedDB with a small intraday slice
     if (baseTF >= 86400 || baseCandles.length > 3000) {
@@ -299,12 +342,13 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     }
   },
   restoreDailyDataset: (targetTF: number = 86400) => {
-    const { dailyMasterCandles } = get();
-    if (dailyMasterCandles && dailyMasterCandles.length > 500) {
-      const sortedTimes = dailyMasterCandles.map((c) => c.time);
+    const { dailyMasterMap, currentSymbol } = get();
+    const master = dailyMasterMap?.[currentSymbol];
+    if (master && master.length > 500) {
+      const sortedTimes = master.map((c) => c.time);
       set({
-        baseCandles: dailyMasterCandles,
-        displayCandles: aggregateCandles(dailyMasterCandles, targetTF, 86400),
+        baseCandles: master,
+        displayCandles: aggregateCandles(master, targetTF, 86400),
         sortedTimes,
         baseTF: 86400,
         activeTF: targetTF,

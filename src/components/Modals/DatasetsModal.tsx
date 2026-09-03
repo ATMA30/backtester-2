@@ -200,6 +200,7 @@ export const DatasetsModal: React.FC = () => {
   // ── GESTION DES DATASETS BRUTS ──────────────────────────────
   const handleLoadDataset = (dataset: DatasetMeta) => {
     if (!dataset.data || dataset.data.length === 0) return;
+    useReplayStore.getState().resetReplay();
     setSymbol(dataset.symbol);
     setBaseCandles(dataset.data, dataset.baseTF);
     setTimeframe(dataset.baseTF);

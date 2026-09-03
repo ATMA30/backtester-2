@@ -10,8 +10,11 @@ function cleanCandles(candles: Candle[], symbol: string): Candle[] {
 
   for (let i = 0; i < candles.length; i++) {
     const c = candles[i];
-    if (!c.time || seen.has(c.time)) continue;
-    seen.add(c.time);
+    if (!c || c.time == null) continue;
+    let t = Math.floor(Number(c.time));
+    if (t > 2500000000) t = Math.floor(t / 1000);
+    if (t <= 0 || seen.has(t)) continue;
+    seen.add(t);
 
     const o = Number(c.open);
     let h = Number(c.high ?? o);
@@ -38,7 +41,7 @@ function cleanCandles(candles: Candle[], symbol: string): Candle[] {
     }
 
     cleaned.push({
-      time: Math.floor(c.time),
+      time: t,
       open: parseFloat(o.toFixed(5)),
       high: parseFloat(h.toFixed(5)),
       low: parseFloat(l.toFixed(5)),
