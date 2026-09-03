@@ -39,13 +39,17 @@ export function fetchDerivChunk(
         if (msg.candles && Array.isArray(msg.candles)) {
           clearTimeout(timer);
           ws?.close();
-          const pip = derivSymbol.includes('JPY') ? 0.01 : 0.0001;
+          const isSynth = derivSymbol.startsWith('R_') || derivSymbol.startsWith('1HZ') || derivSymbol.startsWith('BOOM') || derivSymbol.startsWith('CRASH');
+          const pip = isSynth ? 1.0 : derivSymbol.includes('JPY') ? 0.01 : 0.0001;
           const candles: Candle[] = msg.candles.map((c: any, i: number) => {
             const o = parseFloat(c.open);
             const h = parseFloat(c.high);
             const l = parseFloat(c.low);
             const cl = parseFloat(c.close);
-            const vol = Math.floor(1000 + (Math.abs(h - l) / pip) * 15 + ((i * 37) % 400));
+            const priceRange = Math.abs(h - l);
+            const vol = isSynth
+              ? Math.floor(350 + (priceRange / pip) * 25 + ((i * 23) % 180))
+              : Math.floor(1000 + (priceRange / pip) * 15 + ((i * 37) % 400));
             return {
               time: c.epoch,
               open: o,

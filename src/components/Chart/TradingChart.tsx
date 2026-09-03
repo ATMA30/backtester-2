@@ -71,7 +71,7 @@ export const TradingChart: React.FC = () => {
       },
       rightPriceScale: {
         borderColor: 'rgba(255, 255, 255, 0.08)',
-        scaleMargins: { top: 0.06, bottom: 0.14 },
+        scaleMargins: { top: 0.06, bottom: 0.26 },
         autoScale: true,
       },
     });
@@ -79,9 +79,11 @@ export const TradingChart: React.FC = () => {
     const vSeries = newChart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     newChart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.72, bottom: 0 },
+      scaleMargins: { top: 0.84, bottom: 0 },
     });
 
     setChart(newChart);
@@ -208,13 +210,17 @@ export const TradingChart: React.FC = () => {
     }
 
     if (volumeSeries) {
-      volumeSeries.applyOptions({ visible: showVolume });
+      volumeSeries.applyOptions({
+        visible: showVolume,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
       if (showVolume) {
         volumeSeries.setData(
           displayCandles.map((c) => ({
             time: c.time as any,
             value: c.volume,
-            color: c.close >= c.open ? 'rgba(16, 185, 129, 0.65)' : 'rgba(244, 63, 94, 0.65)',
+            color: c.close >= c.open ? 'rgba(16, 185, 129, 0.40)' : 'rgba(244, 63, 94, 0.40)',
           }))
         );
       }
@@ -235,10 +241,10 @@ export const TradingChart: React.FC = () => {
       const hasSubPanes = activeIndicators.some((i) => i.type === 'RSI' || i.type === 'MACD');
       try {
         chart.priceScale('right').applyOptions({
-          scaleMargins: { top: 0.04, bottom: hasSubPanes ? 0.36 : 0.18 },
+          scaleMargins: { top: 0.05, bottom: hasSubPanes ? 0.42 : 0.26 },
         });
         chart.priceScale('volume').applyOptions({
-          scaleMargins: { top: hasSubPanes ? 0.58 : 0.72, bottom: hasSubPanes ? 0.20 : 0 },
+          scaleMargins: { top: hasSubPanes ? 0.62 : 0.84, bottom: hasSubPanes ? 0.28 : 0 },
         });
       } catch {}
 
