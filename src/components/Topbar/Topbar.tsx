@@ -478,20 +478,20 @@ export const Topbar: React.FC = () => {
                           const nowSec = Math.floor(Date.now() / 1000);
                           const ageDays = Math.floor((nowSec - prevCutTime) / 86400);
 
-                          if (t.s <= 60 && ageDays > 7) {
+                          if (t.s <= 60 && ageDays > 30) {
                             closeAllDropdowns();
                             showToast(
-                              `⚠️ Limite d'archive 1m : les données 1 minute ne remontent qu'aux 7 derniers jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Impossible de descendre en 1m à cette date. Pour rejouer cette date, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
+                              `⚠️ Limite d'archive 1m : les données 1 minute remontent jusqu'aux 30 derniers jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer des dates antérieures, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
                               'warning',
                               6000
                             );
                             return;
                           }
 
-                          if (t.s > 60 && t.s <= 1800 && ageDays > 60) {
+                          if (t.s > 60 && t.s <= 1800 && ageDays > 90) {
                             closeAllDropdowns();
                             showToast(
-                              `⚠️ Limite d'archive ${t.label} : les flux intrajournaliers (${t.label}) ne remontent qu'à 60 jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer cette date, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
+                              `⚠️ Limite d'archive ${t.label} : les flux intrajournaliers (${t.label}) remontent jusqu'à 90 jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer cette date, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
                               'warning',
                               6000
                             );
@@ -698,8 +698,8 @@ export const Topbar: React.FC = () => {
                           fontWeight: 500,
                         }}
                       >
-                        {t.s <= 60 ? 'Archive 7j' :
-                         t.s <= 1800 ? 'Archive 60j' :
+                        {t.s <= 60 ? 'Archive 30j' :
+                         t.s <= 1800 ? 'Archive 90j' :
                          t.s <= 3600 ? 'Archive 2 ans' :
                          t.s <= 14400 ? 'Archive 5 ans' :
                          '27 ans (BCE)'}

@@ -136,17 +136,18 @@ function marketDataPlugin(): Plugin {
               else if (symbol === 'SILVER' || symbol === 'XAGUSD') inst = 'xagusd';
 
               const tf = interval === '1d' ? 'd1' : interval === '1h' ? 'h1' : interval === '15m' ? 'm15' : interval === '5m' ? 'm5' : 'm1';
-              const toD = new Date().toISOString().slice(0, 10);
-              const now = new Date();
+              const toParam = url.searchParams.get('to');
+              const targetDate = toParam ? new Date(toParam.includes('-') ? toParam : Number(toParam) * 1000) : new Date();
+              const toD = targetDate.toISOString().slice(0, 10);
               const fromD =
                 interval === '1m'
-                  ? new Date(now.getTime() - 7 * 86400 * 1000).toISOString().slice(0, 10)
+                  ? new Date(targetDate.getTime() - 30 * 86400 * 1000).toISOString().slice(0, 10)
                   : interval === '5m' || interval === '3m'
-                  ? new Date(now.getTime() - 30 * 86400 * 1000).toISOString().slice(0, 10)
+                  ? new Date(targetDate.getTime() - 90 * 86400 * 1000).toISOString().slice(0, 10)
                   : interval === '15m' || interval === '30m'
-                  ? new Date(now.getTime() - 60 * 86400 * 1000).toISOString().slice(0, 10)
+                  ? new Date(targetDate.getTime() - 180 * 86400 * 1000).toISOString().slice(0, 10)
                   : interval === '1h' || interval === '4h'
-                  ? new Date(now.getTime() - 365 * 86400 * 1000).toISOString().slice(0, 10)
+                  ? new Date(targetDate.getTime() - 730 * 86400 * 1000).toISOString().slice(0, 10)
                   : '2016-01-01';
 
               const rates = await getHistoricalRates({

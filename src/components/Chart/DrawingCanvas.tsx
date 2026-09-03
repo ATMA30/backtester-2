@@ -1121,24 +1121,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     const macdInd = activeIndicators.find((i) => i.type === 'MACD');
     const hasOscillator = Boolean(rsiInd || macdInd);
 
-    // Volume Section divider
-    const volTopY = height * (hasOscillator ? 0.65 : 0.81);
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1 * dpr;
-    ctx.beginPath();
-    ctx.moveTo(0, volTopY * dpr);
-    ctx.lineTo(width * dpr, volTopY * dpr);
-    ctx.stroke();
-
-    // Volume label
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.font = `bold ${8.5 * dpr}px JetBrains Mono, monospace`;
-    ctx.fillText('VOL', 8 * dpr, (volTopY + 12) * dpr);
-
     // Oscillator Section divider (if active)
     if (hasOscillator) {
-      const oscTopY = height * 0.81;
+      const oscTopY = height * 0.785;
 
       // Dark background for oscillator pane
       ctx.fillStyle = 'rgba(11, 14, 20, 0.55)';

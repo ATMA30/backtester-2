@@ -263,7 +263,8 @@ export async function fetchHistoricalData(
     // 0. Primary Institutional API (/api/history equivalent to python server)
     if (!sym.startsWith('R_') && !sym.startsWith('1HZ') && !sym.startsWith('BOOM') && !sym.startsWith('CRASH') && !sym.startsWith('STEP') && !sym.startsWith('JUMP')) {
       try {
-        const apiRes = await fetch(`/api/history?symbol=${encodeURIComponent(sym)}&interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}`);
+        const toQuery = targetTimestamp ? `&to=${encodeURIComponent(targetTimestamp)}` : '';
+        const apiRes = await fetch(`/api/history?symbol=${encodeURIComponent(sym)}&interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}${toQuery}`);
         if (apiRes.ok) {
           const json = await apiRes.json();
           if (json && Array.isArray(json.candles) && json.candles.length > 50) {
