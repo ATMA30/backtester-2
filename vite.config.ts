@@ -12,6 +12,29 @@ const FOREX_MAJORS = new Set([
   'USDMXN', 'USDZAR', 'USDTRY', 'USDSGD', 'USDNOK', 'USDSEK', 'USDPLN', 'EURTRY',
 ]);
 
+function aggregateCandlesBackend(candles: any[], bucketSeconds: number) {
+  if (!candles || candles.length === 0) return [];
+  const groups = new Map<number, any[]>();
+  for (const c of candles) {
+    const bucket = Math.floor(c.time / bucketSeconds) * bucketSeconds;
+    if (!groups.has(bucket)) groups.set(bucket, []);
+    groups.get(bucket)!.push(c);
+  }
+  const result: any[] = [];
+  for (const [bucket, list] of groups.entries()) {
+    list.sort((a, b) => a.time - b.time);
+    result.push({
+      time: bucket,
+      open: list[0].open,
+      high: Math.max(...list.map((c) => c.high)),
+      low: Math.min(...list.map((c) => c.low)),
+      close: list[list.length - 1].close,
+      volume: list.reduce((sum, c) => sum + (c.volume || 0), 0),
+    });
+  }
+  return result.sort((a, b) => a.time - b.time);
+}
+
 function fetchYahooBackend(symbol: string, range: string, interval: string): Promise<any[]> {
 
   let ySym = symbol;
@@ -135,7 +158,13 @@ function marketDataPlugin(): Plugin {
               if (symbol === 'GOLD' || symbol === 'XAUUSD') inst = 'xauusd';
               else if (symbol === 'SILVER' || symbol === 'XAGUSD') inst = 'xagusd';
 
-              const tf = interval === '1d' ? 'd1' : interval === '1h' ? 'h1' : interval === '15m' ? 'm15' : interval === '5m' ? 'm5' : 'm1';
+              const tf =
+                interval === '1d' ? 'd1' :
+                (interval === '1h' || interval === '4h') ? 'h1' :
+                interval === '30m' ? 'm30' :
+                interval === '15m' ? 'm15' :
+                interval === '5m' ? 'm5' : 'm1';
+
               const toParam = url.searchParams.get('to');
               const targetDate = toParam ? new Date(toParam.includes('-') ? toParam : Number(toParam) * 1000) : new Date();
               const toD = targetDate.toISOString().slice(0, 10);
@@ -143,11 +172,13 @@ function marketDataPlugin(): Plugin {
                 interval === '1m'
                   ? new Date(targetDate.getTime() - 30 * 86400 * 1000).toISOString().slice(0, 10)
                   : interval === '5m' || interval === '3m'
-                  ? new Date(targetDate.getTime() - 90 * 86400 * 1000).toISOString().slice(0, 10)
-                  : interval === '15m' || interval === '30m'
-                  ? new Date(targetDate.getTime() - 180 * 86400 * 1000).toISOString().slice(0, 10)
-                  : interval === '1h' || interval === '4h'
-                  ? new Date(targetDate.getTime() - 730 * 86400 * 1000).toISOString().slice(0, 10)
+                  ? new Date(targetDate.getTime() - 60 * 86400 * 1000).toISOString().slice(0, 10)
+                  : interval === '15m'
+                  ? new Date(targetDate.getTime() - 120 * 86400 * 1000).toISOString().slice(0, 10)
+                  : interval === '30m'
+                  ? new Date(targetDate.getTime() - 240 * 86400 * 1000).toISOString().slice(0, 10)
+                  : (interval === '1h' || interval === '4h')
+                  ? new Date(targetDate.getTime() - 1825 * 86400 * 1000).toISOString().slice(0, 10)
                   : '2016-01-01';
 
               const rates = await getHistoricalRates({
@@ -165,6 +196,10 @@ function marketDataPlugin(): Plugin {
                   close: Number(r.close),
                   volume: Math.floor(Number(r.volume || 0)),
                 }));
+
+                if (interval === '4h') {
+                  candles = aggregateCandlesBackend(candles, 14400);
+                }
               }
             } catch (err) {
               console.warn('[Dukascopy Spot Error]:', err);

@@ -481,27 +481,47 @@ export const Topbar: React.FC = () => {
                           if (t.s <= 60 && ageDays > 30) {
                             closeAllDropdowns();
                             showToast(
-                              `⚠️ Limite d'archive 1m : les données 1 minute remontent jusqu'aux 30 derniers jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer des dates antérieures, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
+                              `⚠️ Limite d'archive 1m : les données 1 minute remontent jusqu'aux 30 derniers jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer des dates antérieures, utilisez le 1H/4H (5 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
                               'warning',
                               6000
                             );
                             return;
                           }
 
-                          if (t.s > 60 && t.s <= 1800 && ageDays > 90) {
+                          if (t.s > 60 && t.s <= 300 && ageDays > 60) {
                             closeAllDropdowns();
                             showToast(
-                              `⚠️ Limite d'archive ${t.label} : les flux intrajournaliers (${t.label}) remontent jusqu'à 90 jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer cette date, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
+                              `⚠️ Limite d'archive 5m : les flux 5 minutes remontent jusqu'à 60 jours. Pour rejouer cette date, utilisez le 1H/4H (5 ans) ou 1D (27 ans).`,
                               'warning',
                               6000
                             );
                             return;
                           }
 
-                          if (t.s > 1800 && t.s <= 3600 && ageDays > 730) {
+                          if (t.s > 300 && t.s <= 900 && ageDays > 120) {
                             closeAllDropdowns();
                             showToast(
-                              `⚠️ Limite d'archive 1h : les flux horaires ne remontent qu'à 2 ans (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer des dates antérieures, utilisez le timeframe 1D (27 ans d'historique). Le Replay reste en place.`,
+                              `⚠️ Limite d'archive 15m : les flux 15 minutes remontent jusqu'à 120 jours (4 mois). Pour rejouer cette date, utilisez le 1H/4H (5 ans) ou 1D (27 ans).`,
+                              'warning',
+                              6000
+                            );
+                            return;
+                          }
+
+                          if (t.s > 900 && t.s <= 1800 && ageDays > 240) {
+                            closeAllDropdowns();
+                            showToast(
+                              `⚠️ Limite d'archive 30m : les flux 30 minutes remontent jusqu'à 240 jours (8 mois). Pour rejouer cette date, utilisez le 1H/4H (5 ans) ou 1D (27 ans).`,
+                              'warning',
+                              6000
+                            );
+                            return;
+                          }
+
+                          if (t.s > 1800 && t.s <= 14400 && ageDays > 1825) {
+                            closeAllDropdowns();
+                            showToast(
+                              `⚠️ Limite d'archive ${t.label} : les flux horaires/4h remontent jusqu'à 5 ans. Pour des dates antérieures, utilisez le 1D (27 ans d'historique).`,
                               'warning',
                               6000
                             );
@@ -699,8 +719,9 @@ export const Topbar: React.FC = () => {
                         }}
                       >
                         {t.s <= 60 ? 'Archive 30j' :
-                         t.s <= 1800 ? 'Archive 90j' :
-                         t.s <= 3600 ? 'Archive 2 ans' :
+                         t.s <= 300 ? 'Archive 60j' :
+                         t.s <= 900 ? 'Archive 120j' :
+                         t.s <= 1800 ? 'Archive 240j' :
                          t.s <= 14400 ? 'Archive 5 ans' :
                          '27 ans (BCE)'}
                       </span>
