@@ -4,14 +4,15 @@ import https from 'https';
 // @ts-expect-error dukascopy-node cjs import
 import { getHistoricalRates } from 'dukascopy-node';
 
+const FOREX_MAJORS = new Set([
+  'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
+  'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'CADJPY', 'CHFJPY', 'NZDJPY',
+  'EURAUD', 'EURCAD', 'EURCHF', 'EURNZD', 'GBPAUD', 'GBPCAD', 'GBPCHF',
+  'GBPNZD', 'AUDCAD', 'AUDCHF', 'AUDNZD', 'CADCHF', 'NZDCAD', 'NZDCHF',
+  'USDMXN', 'USDZAR', 'USDTRY', 'USDSGD', 'USDNOK', 'USDSEK', 'USDPLN', 'EURTRY',
+]);
+
 function fetchYahooBackend(symbol: string, range: string, interval: string): Promise<any[]> {
-  const FOREX_MAJORS = new Set([
-    'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
-    'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'CADJPY', 'CHFJPY', 'NZDJPY',
-    'EURAUD', 'EURCAD', 'EURCHF', 'EURNZD', 'GBPAUD', 'GBPCAD', 'GBPCHF',
-    'GBPNZD', 'AUDCAD', 'AUDCHF', 'AUDNZD', 'CADCHF', 'NZDCAD', 'NZDCHF',
-    'USDMXN', 'USDZAR', 'USDTRY', 'USDSGD', 'USDNOK', 'USDSEK', 'USDPLN', 'EURTRY',
-  ]);
 
   let ySym = symbol;
   if (FOREX_MAJORS.has(symbol)) ySym = `${symbol}=X`;
@@ -124,10 +125,16 @@ function marketDataPlugin(): Plugin {
             }
           }
 
-          // If Spot Gold or Silver, use Swiss Bank Dukascopy Spot (matches TradingView OANDA spot rates cent for cent!)
-          if (symbol === 'XAUUSD' || symbol === 'GOLD' || symbol === 'XAGUSD' || symbol === 'SILVER') {
+          // If Spot Gold, Silver or Forex Intraday, use Swiss Bank Dukascopy (real ECN ticks & volumes matching TradingView!)
+          const isForexIntraday = interval !== '1d' && FOREX_MAJORS.has(symbol);
+          const isMetals = symbol === 'XAUUSD' || symbol === 'GOLD' || symbol === 'XAGUSD' || symbol === 'SILVER';
+
+          if (isMetals || isForexIntraday) {
             try {
-              const inst = symbol.includes('XAG') || symbol.includes('SILVER') ? 'xagusd' : 'xauusd';
+              let inst = symbol.toLowerCase();
+              if (symbol === 'GOLD' || symbol === 'XAUUSD') inst = 'xauusd';
+              else if (symbol === 'SILVER' || symbol === 'XAGUSD') inst = 'xagusd';
+
               const tf = interval === '1d' ? 'd1' : interval === '1h' ? 'h1' : interval === '15m' ? 'm15' : interval === '5m' ? 'm5' : 'm1';
               const toD = new Date().toISOString().slice(0, 10);
               const now = new Date();
@@ -159,7 +166,7 @@ function marketDataPlugin(): Plugin {
                 }));
               }
             } catch (err) {
-              console.warn('[Dukascopy Spot Metals Error]:', err);
+              console.warn('[Dukascopy Spot Error]:', err);
             }
           }
 

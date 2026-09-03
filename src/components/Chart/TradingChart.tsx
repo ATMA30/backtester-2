@@ -6,7 +6,60 @@ import { useReplayStore } from '../../store/useReplayStore';
 import { useUIStore } from '../../store/useUIStore';
 import { DrawingCanvas } from './DrawingCanvas';
 import { fetchHistoricalData } from '../../services/historicalApi';
-import { Candle } from '../../types/market';
+import { Candle, ActiveIndicator } from '../../types/market';
+
+function applyResponsiveScaleMargins(
+  chart: any,
+  showVolume: boolean,
+  activeIndicators: ActiveIndicator[]
+) {
+  if (!chart) return;
+  const hasSubPanes = activeIndicators.some((i) => i.type === 'RSI' || i.type === 'MACD');
+
+  let priceMargins: { top: number; bottom: number };
+  let volumeMargins: { top: number; bottom: number };
+  let subPaneMargins: { top: number; bottom: number };
+
+  if (!showVolume && !hasSubPanes) {
+    // 1. Full clean screen: No volume, no indicator (100% chart height for candles)
+    priceMargins = { top: 0.04, bottom: 0.04 };
+    volumeMargins = { top: 1.0, bottom: 0.0 };
+    subPaneMargins = { top: 1.0, bottom: 0.0 };
+  } else if (showVolume && !hasSubPanes) {
+    // 2. Volume only: Price takes top 84%, volume takes bottom 16% cleanly
+    priceMargins = { top: 0.04, bottom: 0.16 };
+    volumeMargins = { top: 0.84, bottom: 0.0 };
+    subPaneMargins = { top: 1.0, bottom: 0.0 };
+  } else if (!showVolume && hasSubPanes) {
+    // 3. Indicator only: Price takes top 74%, Sub-pane takes bottom 24%
+    priceMargins = { top: 0.04, bottom: 0.25 };
+    volumeMargins = { top: 1.0, bottom: 0.0 };
+    subPaneMargins = { top: 0.77, bottom: 0.02 };
+  } else {
+    // 4. Both Volume and Indicator:
+    // Price takes top 74%, volume sits in bottom of price pane (60%-74%),
+    // Sub-pane sits directly beneath (77%-98%) with NO dead space!
+    priceMargins = { top: 0.04, bottom: 0.25 };
+    volumeMargins = { top: 0.60, bottom: 0.25 };
+    subPaneMargins = { top: 0.77, bottom: 0.02 };
+  }
+
+  try {
+    chart.priceScale('right').applyOptions({ scaleMargins: priceMargins });
+    chart.priceScale('volume').applyOptions({ scaleMargins: volumeMargins });
+    if (hasSubPanes) {
+      activeIndicators.forEach((ind) => {
+        if (ind.type === 'RSI') {
+          chart.priceScale('rsi_pane').applyOptions({ scaleMargins: subPaneMargins, autoScale: true });
+        } else if (ind.type === 'MACD') {
+          chart.priceScale('macd_pane').applyOptions({ scaleMargins: subPaneMargins, autoScale: true });
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('scaleMargins error:', err);
+  }
+}
 
 export const TradingChart: React.FC = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -82,9 +135,8 @@ export const TradingChart: React.FC = () => {
       lastValueVisible: false,
       priceLineVisible: false,
     });
-    newChart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.84, bottom: 0 },
-    });
+    const { showVolume: initialShowVol, activeIndicators: initialInds } = useMarketStore.getState();
+    applyResponsiveScaleMargins(newChart, initialShowVol, initialInds);
 
     setChart(newChart);
     setVolumeSeries(vSeries);
@@ -127,7 +179,8 @@ export const TradingChart: React.FC = () => {
     if (volumeSeries) {
       volumeSeries.applyOptions({ visible: showVolume });
     }
-  }, [chart, showGrid, showVolume, volumeSeries]);
+    applyResponsiveScaleMargins(chart, showVolume, activeIndicators);
+  }, [chart, showGrid, showVolume, volumeSeries, activeIndicators]);
 
   // ── UPDATE MAIN SERIES TYPE ───────────────────────────────
   useEffect(() => {
@@ -150,14 +203,14 @@ export const TradingChart: React.FC = () => {
       });
     } else if (chartType === 'Line') {
       newMain = chart.addLineSeries({
-        color: '#3B82F6',
+        color: '#2962FF',
         lineWidth: 2,
       });
     } else {
       newMain = chart.addAreaSeries({
-        topColor: 'rgba(59, 130, 246, 0.35)',
-        bottomColor: 'rgba(59, 130, 246, 0.0)',
-        lineColor: '#3B82F6',
+        topColor: 'rgba(41, 98, 255, 0.4)',
+        bottomColor: 'rgba(41, 98, 255, 0.0)',
+        lineColor: '#2962FF',
         lineWidth: 2,
       });
     }
@@ -238,17 +291,10 @@ export const TradingChart: React.FC = () => {
         }
       });
 
-      const hasSubPanes = activeIndicators.some((i) => i.type === 'RSI' || i.type === 'MACD');
-      try {
-        chart.priceScale('right').applyOptions({
-          scaleMargins: { top: 0.05, bottom: hasSubPanes ? 0.42 : 0.26 },
-        });
-        chart.priceScale('volume').applyOptions({
-          scaleMargins: { top: hasSubPanes ? 0.62 : 0.84, bottom: hasSubPanes ? 0.28 : 0 },
-        });
-      } catch {}
+      // 2. Adjust margins dynamically
+      applyResponsiveScaleMargins(chart, showVolume, activeIndicators);
 
-      // 2. Add or update indicators
+      // 3. Add or update indicators
       activeIndicators.forEach((ind) => {
         try {
           let s = indicatorSeriesMapRef.current.get(ind.id);
@@ -263,17 +309,6 @@ export const TradingChart: React.FC = () => {
               priceScaleId: scaleId,
             });
             indicatorSeriesMapRef.current.set(ind.id, s);
-
-            if (scaleId !== 'right') {
-              try {
-                chart.priceScale(scaleId).applyOptions({
-                  scaleMargins: { top: 0.83, bottom: 0.02 },
-                  autoScale: true,
-                });
-              } catch (scaleErr) {
-                console.warn('Scale init error:', scaleErr);
-              }
-            }
           }
 
           if (!displayCandles || displayCandles.length === 0) return;
