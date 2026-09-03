@@ -1,4 +1,26 @@
 import React, { useEffect, useState } from 'react';
+import {
+  X,
+  Target,
+  ChevronDown,
+  Shuffle,
+  Clock,
+  Calendar,
+  SkipBack,
+  Play,
+  Pause,
+  SkipForward,
+  Gauge,
+  Hourglass,
+  Link2,
+  ArrowUp,
+  ArrowDown,
+  ShieldCheck,
+  PieChart,
+  XCircle,
+  BookOpen,
+  Trash2,
+} from 'lucide-react';
 import { useReplayStore } from '../../store/useReplayStore';
 import { useMarketStore, aggregateCandles } from '../../store/useMarketStore';
 import { useTradeStore } from '../../store/useTradeStore';
@@ -70,7 +92,6 @@ export const ReplayBar: React.FC = () => {
     isActive,
     isPlaying,
     currentIndex,
-    startIndex,
     speedMs,
     setIsPlaying,
     setIsActive,
@@ -144,7 +165,6 @@ export const ReplayBar: React.FC = () => {
 
   // ── AUTO-SYNC RISK% & QTY BASED ON SL DISTANCE ───────────
   const currentCandle = baseCandles[currentIndex];
-  const lastCandle = baseCandles[baseCandles.length - 1];
   const currentPrice = currentCandle ? currentCandle.close : 0;
 
   // Calculate dynamic quantity preview based on risk% and user's SL
@@ -153,14 +173,28 @@ export const ReplayBar: React.FC = () => {
     const targetEntry = parsePriceInput(entryInput) || currentPrice;
     const slVal = parseSlPrice(slInput, true, targetEntry, pip);
     if (slVal !== null && Math.abs(targetEntry - slVal) > 0) {
-      const riskCash = (balance * (riskPercent / 100));
+      const riskCash = balance * (riskPercent / 100);
       const slDist = Math.abs(targetEntry - slVal);
-      const calculatedLot = Math.max(0.01, parseFloat((riskCash / slDist).toFixed(2)));
+      const isForex = currentSymbol.length === 6 && !currentSymbol.includes('BTC') && !currentSymbol.includes('ETH');
+      const isJpy = currentSymbol.includes('JPY');
+      const isGold = currentSymbol.includes('XAU') || currentSymbol.includes('GOLD');
+
+      let calculatedLot: number;
+      if (isForex) {
+        const slPips = slDist / pip;
+        const pipValuePerLot = isJpy ? 7.0 : 10.0;
+        calculatedLot = Math.max(0.01, parseFloat((riskCash / (slPips * pipValuePerLot)).toFixed(2)));
+      } else if (isGold) {
+        calculatedLot = Math.max(0.01, parseFloat((riskCash / (slDist * 100)).toFixed(2)));
+      } else {
+        calculatedLot = Math.max(0.01, parseFloat((riskCash / slDist).toFixed(2)));
+      }
+
       if (calculatedLot !== quantity) {
         setQuantity(calculatedLot);
       }
     }
-  }, [riskPercent, slInput, entryInput, currentPrice, balance, pip]);
+  }, [riskPercent, slInput, entryInput, currentPrice, balance, pip, currentSymbol, quantity, setQuantity]);
 
   if (!isActive) return null;
 
@@ -208,7 +242,7 @@ export const ReplayBar: React.FC = () => {
     setCurrentIndex(randIdx);
     setIsPlaying(false);
     setShowAnchorMenu(false);
-    showToast('🎲 Départ aléatoire blind test lancé !', 'info');
+    showToast('Départ aléatoire blind test lancé !', 'info');
   };
 
   const startAtSession = (hour: number, name: string) => {
@@ -220,7 +254,7 @@ export const ReplayBar: React.FC = () => {
         setCurrentIndex(i);
         setIsPlaying(false);
         setShowAnchorMenu(false);
-        showToast(`🎯 Départ calé sur la session ${name}`, 'success');
+        showToast(`Départ calé sur la session ${name}`, 'success');
         return;
       }
     }
@@ -240,7 +274,7 @@ export const ReplayBar: React.FC = () => {
       setCurrentIndex(idx);
       setIsPlaying(false);
       setShowAnchorMenu(false);
-      showToast(`🎯 Replay ancré au ${userInput}`, 'success');
+      showToast(`Replay ancré au ${userInput}`, 'success');
     }
   };
 
@@ -259,10 +293,10 @@ export const ReplayBar: React.FC = () => {
     if (isPending) {
       const orderType = targetEntry! < currentPrice ? 'LIMIT' : 'STOP';
       placePendingOrder('LONG', orderType, targetEntry!, sl, tp, currentCandle.time);
-      showToast(`⏳ Ordre ACHAT ${orderType} placé @ ${targetEntry!.toFixed(5)} (en attente du prix)`, 'info', 3500);
+      showToast(`Ordre ACHAT ${orderType} placé @ ${targetEntry!.toFixed(5)}`, 'info', 3500);
     } else {
       openTrade('LONG', currentPrice, sl, tp, currentCandle.time);
-      showToast(`🟢 Position ACHAT ouverte @ ${currentPrice.toFixed(5)}`, 'success', 2500);
+      showToast(`Position ACHAT ouverte @ ${currentPrice.toFixed(5)}`, 'success', 2500);
     }
   };
 
@@ -281,10 +315,10 @@ export const ReplayBar: React.FC = () => {
     if (isPending) {
       const orderType = targetEntry! > currentPrice ? 'LIMIT' : 'STOP';
       placePendingOrder('SHORT', orderType, targetEntry!, sl, tp, currentCandle.time);
-      showToast(`⏳ Ordre VENTE ${orderType} placé @ ${targetEntry!.toFixed(5)} (en attente du prix)`, 'info', 3500);
+      showToast(`Ordre VENTE ${orderType} placé @ ${targetEntry!.toFixed(5)}`, 'info', 3500);
     } else {
       openTrade('SHORT', currentPrice, sl, tp, currentCandle.time);
-      showToast(`🔴 Position VENTE ouverte @ ${currentPrice.toFixed(5)}`, 'success', 2500);
+      showToast(`Position VENTE ouverte @ ${currentPrice.toFixed(5)}`, 'success', 2500);
     }
   };
 
@@ -302,11 +336,9 @@ export const ReplayBar: React.FC = () => {
             setIsActive(false);
             setDisplayCandles(baseCandles);
           }}
+          style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
         >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
+          <X size={12} strokeWidth={2.4} />
           <span>Quitter</span>
         </button>
 
@@ -316,21 +348,36 @@ export const ReplayBar: React.FC = () => {
             className="rp-strategy-btn"
             onClick={() => setShowAnchorMenu(!showAnchorMenu)}
             title="Point d'ancrage & Stratégie"
+            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" />
-            </svg>
-            Ancrage ▾
+            <Target size={13} strokeWidth={2} style={{ color: '#38BDF8' }} />
+            <span>Ancrage</span>
+            <ChevronDown size={10} strokeWidth={2.2} />
           </button>
           {showAnchorMenu && (
-            <div className="tv-dropdown-menu show" style={{ bottom: 'calc(100% + 8px)', top: 'auto', minWidth: '210px', display: 'block' }}>
+            <div className="tv-dropdown-menu show" style={{ bottom: 'calc(100% + 8px)', top: 'auto', minWidth: '220px', display: 'block' }}>
               <div className="dropdown-section-label">Point de départ</div>
-              <div className="tv-dropdown-item" onClick={startRandom}>🎲 Session Aléatoire (Blind Test)</div>
-              <div className="tv-dropdown-item" onClick={() => startAtSession(8, 'Londres (08h UTC)')}>🇬🇧 Session Londres (08h UTC)</div>
-              <div className="tv-dropdown-item" onClick={() => startAtSession(13, 'New York (13h UTC)')}>🇺🇸 Session New York (13h UTC)</div>
-              <div className="tv-dropdown-item" onClick={() => startAtSession(0, 'Tokyo (00h UTC)')}>🇯🇵 Session Tokyo (00h UTC)</div>
+              <div className="tv-dropdown-item" onClick={startRandom} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Shuffle size={13} strokeWidth={2} style={{ color: '#A78BFA' }} />
+                <span>Session Aléatoire (Blind Test)</span>
+              </div>
+              <div className="tv-dropdown-item" onClick={() => startAtSession(8, 'Londres (08h UTC)')} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={13} strokeWidth={2} style={{ color: '#60A5FA' }} />
+                <span>Session Londres (08h UTC)</span>
+              </div>
+              <div className="tv-dropdown-item" onClick={() => startAtSession(13, 'New York (13h UTC)')} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={13} strokeWidth={2} style={{ color: '#34D399' }} />
+                <span>Session New York (13h UTC)</span>
+              </div>
+              <div className="tv-dropdown-item" onClick={() => startAtSession(0, 'Tokyo (00h UTC)')} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={13} strokeWidth={2} style={{ color: '#FB923C' }} />
+                <span>Session Tokyo (00h UTC)</span>
+              </div>
               <div className="dropdown-divider" />
-              <div className="tv-dropdown-item" onClick={promptDate}>📅 Saisir une date précise…</div>
+              <div className="tv-dropdown-item" onClick={promptDate} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Calendar size={13} strokeWidth={2} style={{ color: '#FCD34D' }} />
+                <span>Saisir une date précise…</span>
+              </div>
             </div>
           )}
         </div>
@@ -338,34 +385,24 @@ export const ReplayBar: React.FC = () => {
         {/* Step controls */}
         <div className="rp-controls">
           <button id="rp-step-back" title="Bougie précédente (←)" onClick={stepBackward}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="19 20 9 12 19 4 19 20" />
-              <line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
+            <SkipBack size={13} strokeWidth={2} />
           </button>
           <button id="rp-play" className={isPlaying ? 'playing' : ''} title="Lecture / Pause (Espace)" onClick={() => setIsPlaying(!isPlaying)}>
             {isPlaying ? (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="4" width="4" height="16" />
-                <rect x="14" y="4" width="4" height="16" />
-              </svg>
+              <Pause size={14} strokeWidth={2.4} />
             ) : (
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 3 19 12 5 21 5 3" />
-              </svg>
+              <Play size={14} strokeWidth={2.4} fill="currentColor" />
             )}
           </button>
           <button id="rp-step-fwd" title="Bougie suivante (→)" onClick={stepForward}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="5 4 15 12 5 20 5 4" />
-              <line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
+            <SkipForward size={13} strokeWidth={2} />
           </button>
         </div>
 
         {/* 1. Date compacte précise (Intraday) */}
-        <div className="rp-date-badge" title="Horodatage bougie active">
-          {timeCurStr}
+        <div className="rp-date-badge" title="Horodatage bougie active" style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <Calendar size={11} strokeWidth={2} style={{ color: 'var(--text-muted)' }} />
+          <span>{timeCurStr}</span>
         </div>
 
         {/* 1. Sélecteur de vitesse compact (Dropdown 1× ▾) */}
@@ -374,11 +411,11 @@ export const ReplayBar: React.FC = () => {
             className="rp-speed-btn-compact"
             onClick={() => setShowSpeedMenu(!showSpeedMenu)}
             title="Vitesse de défilement du Replay"
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
           >
+            <Gauge size={11} strokeWidth={2} />
             <span>{currentSpeed.label}</span>
-            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+            <ChevronDown size={9} strokeWidth={2.5} />
           </button>
           {showSpeedMenu && (
             <div className="tv-dropdown-menu show" style={{ bottom: 'calc(100% + 8px)', top: 'auto', minWidth: '95px', display: 'block' }}>
@@ -434,11 +471,11 @@ export const ReplayBar: React.FC = () => {
               className="rp-pending-orders-btn"
               onClick={() => setShowOrdersMenu(!showOrdersMenu)}
               title="Gérer les ordres en attente"
+              style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
             >
-              <span>⏳ {pendingOrders.length} en attente</span>
-              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
+              <Hourglass size={11} strokeWidth={2} style={{ color: '#38BDF8' }} />
+              <span>{pendingOrders.length} en attente</span>
+              <ChevronDown size={9} strokeWidth={2.5} />
             </button>
             {showOrdersMenu && (
               <div
@@ -473,9 +510,13 @@ export const ReplayBar: React.FC = () => {
                         borderRadius: '3px',
                         cursor: 'pointer',
                         fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
                       }}
                     >
-                      Tout annuler
+                      <Trash2 size={10} strokeWidth={2} />
+                      <span>Tout annuler</span>
                     </button>
                   )}
                 </div>
@@ -517,11 +558,9 @@ export const ReplayBar: React.FC = () => {
                         alignItems: 'center',
                         justifyContent: 'center',
                         cursor: 'pointer',
-                        fontSize: '11px',
-                        fontWeight: 800,
                       }}
                     >
-                      ✕
+                      <X size={11} strokeWidth={2.4} />
                     </button>
                   </div>
                 ))}
@@ -551,10 +590,7 @@ export const ReplayBar: React.FC = () => {
           </div>
 
           <div className="rp-sync-icon" title="Synchronisé : Si vous entrez un SL, la quantité est calculée automatiquement selon votre Risque%">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-            </svg>
+            <Link2 size={12} strokeWidth={2.2} />
           </div>
 
           <div className="rp-input-box">
@@ -609,11 +645,13 @@ export const ReplayBar: React.FC = () => {
       {/* ── BLOCK 4: ACTIONS D'EXÉCUTION & GESTION (À DROITE) ── */}
       <div className="rp-actions">
         {/* 4. Boutons BUY / SELL épurés et alignés en hauteur */}
-        <button className="trade-btn buy" id="btn-buy" onClick={handleBuy} title="Acheter au marché ou placer un ordre d'achat limite/stop">
-          BUY
+        <button className="trade-btn buy" id="btn-buy" onClick={handleBuy} title="Acheter au marché ou placer un ordre d'achat limite/stop" style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <ArrowUp size={12} strokeWidth={2.8} />
+          <span>BUY</span>
         </button>
-        <button className="trade-btn sell" id="btn-sell" onClick={handleSell} title="Vendre au marché ou placer un ordre de vente limite/stop">
-          SELL
+        <button className="trade-btn sell" id="btn-sell" onClick={handleSell} title="Vendre au marché ou placer un ordre de vente limite/stop" style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <ArrowDown size={12} strokeWidth={2.8} />
+          <span>SELL</span>
         </button>
 
         {/* 4. BE et 1/2 inactifs si aucun trade en cours */}
@@ -623,8 +661,10 @@ export const ReplayBar: React.FC = () => {
           onClick={() => setBreakeven(currentPrice)}
           disabled={!activePosition}
           title={activePosition ? "Passer le Stop Loss à Breakeven (0 Risque)" : "Aucune position ouverte"}
+          style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
         >
-          BE
+          <ShieldCheck size={12} strokeWidth={2} />
+          <span>BE</span>
         </button>
         <button
           className={`trade-btn scale ${!activePosition ? 'disabled' : ''}`}
@@ -632,8 +672,10 @@ export const ReplayBar: React.FC = () => {
           onClick={() => closePartial(50, currentPrice)}
           disabled={!activePosition}
           title={activePosition ? "Clôturer 50% de la position" : "Aucune position ouverte"}
+          style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
         >
-          ½
+          <PieChart size={12} strokeWidth={2} />
+          <span>½</span>
         </button>
 
         {activePosition && (
@@ -642,8 +684,10 @@ export const ReplayBar: React.FC = () => {
             id="btn-close-pos"
             onClick={() => closePosition('MANUAL', currentPrice, currentCandle?.time)}
             title="Fermer la position totale"
+            style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
           >
-            Fermer
+            <XCircle size={12} strokeWidth={2} />
+            <span>Fermer</span>
           </button>
         )}
 
@@ -653,11 +697,9 @@ export const ReplayBar: React.FC = () => {
           id="btn-history"
           onClick={() => openModal('trade-history')}
           title="Journal des trades & Historique des ordres"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-          </svg>
+          <BookOpen size={14} strokeWidth={2} />
         </button>
       </div>
     </div>

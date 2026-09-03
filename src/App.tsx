@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import { Topbar } from './components/Topbar/Topbar';
 import { DrawingSidebar } from './components/Toolbar/DrawingSidebar';
 import { TradingChart } from './components/Chart/TradingChart';
@@ -188,9 +189,15 @@ export const App: React.FC = () => {
       {/* Toast Notification Container */}
       <div id="toast-container">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.type || 'info'}`} style={{ display: 'flex' }}>
-            <span className="toast-icon">
-              {t.type === 'success' ? '✓' : t.type === 'error' ? '✕' : 'ℹ'}
+          <div key={t.id} className={`toast ${t.type || 'info'}`} style={{ display: 'flex', alignItems: 'center' }}>
+            <span className="toast-icon" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              {t.type === 'success' ? (
+                <CheckCircle2 size={15} strokeWidth={2.4} style={{ color: '#00C46E' }} />
+              ) : t.type === 'error' ? (
+                <AlertCircle size={15} strokeWidth={2.4} style={{ color: '#F43F5E' }} />
+              ) : (
+                <Info size={15} strokeWidth={2.4} style={{ color: '#38BDF8' }} />
+              )}
             </span>
             <span className="toast-msg">{t.message}</span>
           </div>

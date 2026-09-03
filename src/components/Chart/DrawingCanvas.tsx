@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { useDrawingStore } from '../../store/useDrawingStore';
 import { useMarketStore } from '../../store/useMarketStore';
 import { useTradeStore } from '../../store/useTradeStore';
-import { Drawing, Point, Handle, DrawingTool } from '../../types/drawing';
+import { Drawing, Point } from '../../types/drawing';
 import { IChartApi, ISeriesApi } from 'lightweight-charts';
 
 interface DrawingCanvasProps {
@@ -45,6 +45,50 @@ function isPointInRect(px: number, py: number, x1: number, y1: number, x2: numbe
   return px >= minX && px <= maxX && py >= minY && py <= maxY;
 }
 
+interface SessionDef {
+  key: string;
+  name: string;
+  startHour: number;
+  endHour: number;
+  color: string;
+  textColor: string;
+  isKillzone?: boolean;
+}
+
+const ALL_SESSIONS: SessionDef[] = [
+  { key: 'sydney', name: 'SYDNEY', startHour: 22, endHour: 7, color: 'rgba(167, 139, 250, 0.06)', textColor: '#A78BFA' },
+  { key: 'tokyo', name: 'TOKYO', startHour: 0, endHour: 9, color: 'rgba(251, 146, 60, 0.06)', textColor: '#FB923C' },
+  { key: 'london', name: 'LONDRES', startHour: 8, endHour: 17, color: 'rgba(96, 165, 250, 0.06)', textColor: '#60A5FA' },
+  { key: 'newyork', name: 'NEW YORK', startHour: 13, endHour: 22, color: 'rgba(52, 211, 153, 0.06)', textColor: '#34D399' },
+  { key: 'asianRange', name: 'ASIAN RANGE', startHour: 0, endHour: 6, color: 'rgba(244, 114, 182, 0.08)', textColor: '#F472B6', isKillzone: true },
+  { key: 'londonOpenKZ', name: 'LONDON KZ', startHour: 7, endHour: 10, color: 'rgba(56, 189, 248, 0.08)', textColor: '#38BDF8', isKillzone: true },
+  { key: 'nyOpenKZ', name: 'NY OPEN KZ', startHour: 12, endHour: 15, color: 'rgba(74, 222, 128, 0.08)', textColor: '#4ADE80', isKillzone: true },
+  { key: 'londonCloseKZ', name: 'LONDON CLOSE', startHour: 15, endHour: 17, color: 'rgba(251, 191, 36, 0.08)', textColor: '#FBBF24', isKillzone: true },
+];
+
+function isCandleInSession(c: { time: number }, sess: SessionDef, useLocalTz: boolean): boolean {
+  const d = new Date(c.time * 1000);
+  const hour = useLocalTz ? d.getHours() : d.getUTCHours();
+  if (sess.startHour < sess.endHour) {
+    return hour >= sess.startHour && hour < sess.endHour;
+  } else {
+    return hour >= sess.startHour || hour < sess.endHour;
+  }
+}
+
+function isSameTradingDay(t1: number, t2: number, sess: SessionDef, useLocalTz: boolean): boolean {
+  const dt = Math.abs(t2 - t1);
+  if (dt > 10800) return false;
+  const d1 = new Date(t1 * 1000);
+  const d2 = new Date(t2 * 1000);
+  if (sess.startHour < sess.endHour) {
+    const day1 = useLocalTz ? d1.getDate() : d1.getUTCDate();
+    const day2 = useLocalTz ? d2.getDate() : d2.getUTCDate();
+    return day1 === day2;
+  }
+  return true;
+}
+
 export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   chart,
   mainSeries,
@@ -65,7 +109,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   } = useDrawingStore();
 
   const {
-    baseCandles,
     displayCandles,
     sortedTimes,
     baseTF,
@@ -582,7 +625,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     }
 
     return null;
-  }, [drawings, selectedDrawingId, toXY]);
+  }, [drawings, selectedDrawingId, toXY, width, height]);
 
   // ── DRAWING CANVAS REDRAW ─────────────────────────────────
   const redraw = useCallback(() => {
@@ -667,49 +710,146 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       ctx.restore();
     }
 
-    // ── 2. RENDER FOREX / TRADING SESSIONS ────────────────────
-    if (forexSessions && (forexSessions.london || forexSessions.newyork || forexSessions.tokyo || forexSessions.sydney)) {
+    // ── 2. RENDER FOREX / TRADING SESSIONS & KILLZONES ──────────
+    const isAnySessionActive =
+      forexSessions &&
+      (forexSessions.london ||
+        forexSessions.newyork ||
+        forexSessions.tokyo ||
+        forexSessions.sydney ||
+        forexSessions.asianRange ||
+        forexSessions.londonOpenKZ ||
+        forexSessions.nyOpenKZ ||
+        forexSessions.londonCloseKZ);
+
+    // Calculate candle interval to strictly ensure intraday resolution (<= 1h)
+    const sampleDt =
+      displayCandles.length >= 2
+        ? Math.abs(displayCandles[1].time - displayCandles[0].time)
+        : (activeTF || baseTF || 86400);
+    const isIntraday = sampleDt > 0 && sampleDt <= 3600 && (activeTF || 86400) <= 3600;
+
+    if (isAnySessionActive && isIntraday) {
       ctx.save();
       const barSpacing = getBarSpacingPx();
+      const useLocal = Boolean(forexSessions.useLocalTz);
 
-      const sIdx = Math.max(0, startIdx - 1);
-      for (let i = sIdx; i <= endIdx; i++) {
-        const c = displayCandles[i];
-        if (!c) continue;
+      const activeSessDefs = ALL_SESSIONS.filter((s) => Boolean((forexSessions as any)[s.key]));
 
-        const d = new Date(c.time * 1000);
-        const hour = d.getUTCHours();
+      for (const sess of activeSessDefs) {
+        let blockStartIdx: number | null = null;
+        let blockHigh = -Infinity;
+        let blockLow = Infinity;
+        let blockStartX = 0;
+        let blockEndX = 0;
 
-        let sessionColor: string | null = null;
-        let sessionTag: string | null = null;
+        const sIdx = Math.max(0, startIdx - 2);
+        const eIdx = Math.min(displayCandles.length - 1, endIdx + 2);
 
-        if (forexSessions.newyork && hour >= 13 && hour < 22) {
-          sessionColor = 'rgba(52, 211, 153, 0.14)';
-          if (hour === 13) sessionTag = 'NEW YORK';
-        } else if (forexSessions.london && hour >= 8 && hour < 17) {
-          sessionColor = 'rgba(96, 165, 250, 0.14)';
-          if (hour === 8) sessionTag = 'LONDON';
-        } else if (forexSessions.tokyo && hour >= 0 && hour < 9) {
-          sessionColor = 'rgba(251, 146, 60, 0.14)';
-          if (hour === 0) sessionTag = 'TOKYO';
-        } else if (forexSessions.sydney && (hour >= 22 || hour < 7)) {
-          sessionColor = 'rgba(167, 139, 250, 0.14)';
-          if (hour === 22) sessionTag = 'SYDNEY';
-        }
+        for (let i = sIdx; i <= eIdx; i++) {
+          const c = displayCandles[i];
+          if (!c) continue;
 
-        if (sessionColor) {
-          const p = toXY(c.time, c.close);
-          if (p.x !== null && p.x >= -barSpacing && p.x <= width + barSpacing) {
-            ctx.fillStyle = sessionColor;
-            ctx.fillRect((p.x - barSpacing * 0.5) * dpr, 0, barSpacing * dpr, height * dpr);
+          const inSess = isCandleInSession(c, sess, useLocal);
 
-            if (sessionTag && p.x >= 0 && p.x <= width - 50) {
-              ctx.fillStyle = 'rgba(11, 14, 20, 0.85)';
-              ctx.fillRect((p.x - 2) * dpr, 4 * dpr, 62 * dpr, 15 * dpr);
-              ctx.fillStyle = sessionColor.replace('0.14', '1.0');
-              ctx.font = `bold ${8 * dpr}px JetBrains Mono, monospace`;
-              ctx.fillText(sessionTag, (p.x + 2) * dpr, 15 * dpr);
+          if (inSess) {
+            const p = toXY(c.time, c.close);
+            if (p.x !== null) {
+              if (blockStartIdx === null) {
+                blockStartIdx = i;
+                blockHigh = c.high;
+                blockLow = c.low;
+                blockStartX = p.x - barSpacing * 0.5;
+                blockEndX = p.x + barSpacing * 0.5;
+              } else {
+                blockHigh = Math.max(blockHigh, c.high);
+                blockLow = Math.min(blockLow, c.low);
+                blockEndX = p.x + barSpacing * 0.5;
+              }
+
+              // Subtle background column slice
+              if (p.x >= -barSpacing && p.x <= width + barSpacing) {
+                ctx.fillStyle = sess.color;
+                ctx.fillRect((p.x - barSpacing * 0.5) * dpr, 0, barSpacing * dpr, height * dpr);
+              }
             }
+          }
+
+          // Check if session block ends: candle outside session, day gap > 3h, or end of loop
+          const nextCandle = displayCandles[i + 1];
+          const nextInSess = nextCandle ? isCandleInSession(nextCandle, sess, useLocal) : false;
+          const isSameDay = nextCandle && c ? isSameTradingDay(c.time, nextCandle.time, sess, useLocal) : false;
+
+          const shouldCloseBlock = blockStartIdx !== null && (!nextInSess || !isSameDay || i === eIdx);
+
+          if (shouldCloseBlock) {
+            // Draw Session Box bounded between High and Low
+            if (forexSessions.showHighLow !== false && blockHigh > -Infinity && blockLow < Infinity && mainSeries) {
+              const yHigh = mainSeries.priceToCoordinate(blockHigh);
+              const yLow = mainSeries.priceToCoordinate(blockLow);
+
+              if (yHigh !== null && yHigh !== undefined && yLow !== null && yLow !== undefined) {
+                const boxTop = Math.min(yHigh, yLow);
+                const boxBottom = Math.max(yHigh, yLow);
+                const boxHeight = Math.max(2, boxBottom - boxTop);
+                const boxWidth = Math.max(2, blockEndX - blockStartX);
+
+                // Soft shaded box over price action of session
+                ctx.fillStyle = sess.color.replace('0.06', '0.12').replace('0.08', '0.14');
+                ctx.fillRect(blockStartX * dpr, boxTop * dpr, boxWidth * dpr, boxHeight * dpr);
+
+                // High dashed line
+                ctx.strokeStyle = sess.textColor;
+                ctx.lineWidth = 1 * dpr;
+                ctx.setLineDash([3 * dpr, 3 * dpr]);
+                ctx.beginPath();
+                ctx.moveTo(blockStartX * dpr, boxTop * dpr);
+                ctx.lineTo(blockEndX * dpr, boxTop * dpr);
+                ctx.stroke();
+
+                // Low dashed line
+                ctx.beginPath();
+                ctx.moveTo(blockStartX * dpr, boxBottom * dpr);
+                ctx.lineTo(blockEndX * dpr, boxBottom * dpr);
+                ctx.stroke();
+
+                ctx.setLineDash([]);
+
+                // High / Low labels
+                ctx.fillStyle = sess.textColor;
+                ctx.font = `600 ${8 * dpr}px JetBrains Mono, monospace`;
+                ctx.fillText(`H: ${blockHigh.toFixed(blockHigh < 10 ? 5 : 2)}`, (blockEndX + 3) * dpr, (boxTop + 3) * dpr);
+                ctx.fillText(`L: ${blockLow.toFixed(blockLow < 10 ? 5 : 2)}`, (blockEndX + 3) * dpr, (boxBottom + 3) * dpr);
+              }
+            }
+
+            // Draw Session Badge label at top
+            if (forexSessions.showLabels !== false && blockStartX >= -100 && blockStartX <= width) {
+              const tagX = Math.max(4, blockStartX);
+              const tagY = sess.isKillzone ? 22 * dpr : 5 * dpr;
+              const textStr = `${sess.name} ${sess.startHour}h-${sess.endHour}h`;
+
+              ctx.font = `bold ${8 * dpr}px JetBrains Mono, monospace`;
+              const textMetrics = ctx.measureText(textStr);
+              const pillW = textMetrics.width + 12 * dpr;
+              const pillH = 14 * dpr;
+
+              ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+              ctx.strokeStyle = sess.textColor;
+              ctx.lineWidth = 1 * dpr;
+              ctx.beginPath();
+              ctx.roundRect(tagX * dpr, tagY, pillW, pillH, 3 * dpr);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.fillStyle = sess.textColor;
+              ctx.fillText(textStr, (tagX + 6) * dpr, tagY + 10 * dpr);
+            }
+
+            // Reset block
+            blockStartIdx = null;
+            blockHigh = -Infinity;
+            blockLow = Infinity;
           }
         }
       }
@@ -1290,7 +1430,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       }
       ctx.restore();
     }
-  }, [drawings, selectedDrawingId, activeTool, currentStyle, toXY, width, height, mainSeries, separatorTF, forexSessions, activePosition, pendingOrders, displayCandles, getBarSpacingPx, chart, activeIndicators]);
+  }, [drawings, selectedDrawingId, activeTool, currentStyle, toXY, width, height, mainSeries, separatorTF, forexSessions, activePosition, pendingOrders, displayCandles, getBarSpacingPx, chart, activeIndicators, activeTF, baseTF, currentSymbol]);
 
   useEffect(() => {
     redraw();
@@ -1553,21 +1693,15 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
       if (type === 'ACTIVE_SL' && activePosition) {
         const isLong = activePosition.type === 'LONG';
-        let validSl = pt.price;
-        if (isLong) {
-          validSl = Math.min(activePosition.entry - minDistance, pt.price);
-        } else {
-          validSl = Math.max(activePosition.entry + minDistance, pt.price);
-        }
+        const validSl = isLong
+          ? Math.min(activePosition.entry - minDistance, pt.price)
+          : Math.max(activePosition.entry + minDistance, pt.price);
         updateActivePositionSlTp(validSl, activePosition.tp);
       } else if (type === 'ACTIVE_TP' && activePosition) {
         const isLong = activePosition.type === 'LONG';
-        let validTp = pt.price;
-        if (isLong) {
-          validTp = Math.max(activePosition.entry + minDistance, pt.price);
-        } else {
-          validTp = Math.min(activePosition.entry - minDistance, pt.price);
-        }
+        const validTp = isLong
+          ? Math.max(activePosition.entry + minDistance, pt.price)
+          : Math.min(activePosition.entry - minDistance, pt.price);
         updateActivePositionSlTp(activePosition.sl, validTp);
       } else if (type === 'PULL_ACTIVE' && activePosition) {
         const isLong = activePosition.type === 'LONG';
@@ -1595,24 +1729,18 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const order = pendingOrders.find((o) => o.id === orderId);
         if (order) {
           const isLong = order.type === 'LONG';
-          let validSl = pt.price;
-          if (isLong) {
-            validSl = Math.min(order.targetPrice - minDistance, pt.price);
-          } else {
-            validSl = Math.max(order.targetPrice + minDistance, pt.price);
-          }
+          const validSl = isLong
+            ? Math.min(order.targetPrice - minDistance, pt.price)
+            : Math.max(order.targetPrice + minDistance, pt.price);
           updatePendingOrder(orderId, { sl: validSl });
         }
       } else if (type === 'PENDING_TP' && orderId) {
         const order = pendingOrders.find((o) => o.id === orderId);
         if (order) {
           const isLong = order.type === 'LONG';
-          let validTp = pt.price;
-          if (isLong) {
-            validTp = Math.max(order.targetPrice + minDistance, pt.price);
-          } else {
-            validTp = Math.min(order.targetPrice - minDistance, pt.price);
-          }
+          const validTp = isLong
+            ? Math.max(order.targetPrice + minDistance, pt.price)
+            : Math.min(order.targetPrice - minDistance, pt.price);
           updatePendingOrder(orderId, { tp: validTp });
         }
       } else if (type === 'PULL_PENDING' && orderId) {
@@ -1668,24 +1796,18 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             // Dragging TP (Take Profit):
             // LONG: TP MUST BE > ENTRY
             // SHORT: TP MUST BE < ENTRY
-            let validTp = pt.price;
-            if (isLong) {
-              validTp = Math.max(entryPrice + minDistance, pt.price);
-            } else {
-              validTp = Math.min(entryPrice - minDistance, pt.price);
-            }
+            const validTp = isLong
+              ? Math.max(entryPrice + minDistance, pt.price)
+              : Math.min(entryPrice - minDistance, pt.price);
             const validTime = Math.max(newPts[0].time + 60, pt.time);
             newPts[1] = { time: validTime, price: validTp };
           } else if (ptIdx === 2) {
             // Dragging SL (Stop Loss):
             // LONG: SL MUST BE < ENTRY
             // SHORT: SL MUST BE > ENTRY
-            let validSl = pt.price;
-            if (isLong) {
-              validSl = Math.min(entryPrice - minDistance, pt.price);
-            } else {
-              validSl = Math.max(entryPrice + minDistance, pt.price);
-            }
+            const validSl = isLong
+              ? Math.min(entryPrice - minDistance, pt.price)
+              : Math.max(entryPrice + minDistance, pt.price);
             newPts[2] = { time: newPts[0].time, price: validSl };
           } else if (ptIdx === 5) {
             // Dragging Right edge width only
@@ -1856,7 +1978,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         if (ty < 35) {
           ty = maxY + 15;
         }
-        let tx = (minX + maxX) / 2 - tbWidth / 2;
+        const tx = (minX + maxX) / 2 - tbWidth / 2;
         toolbarPos = {
           x: Math.max(10, Math.min(width - tbWidth - 70, tx)),
           y: Math.max(10, Math.min(height - 50, ty)),

@@ -31,6 +31,7 @@ interface TradeState {
   setBreakeven: (currentPrice?: number) => void;
   updatePrice: (candleOrPrice: CandleData | number, currentTime?: number) => void;
   resetAccount: () => void;
+  restoreTradeState: (restored: Partial<TradeState>) => void;
   getMetrics: () => TradeMetrics;
 }
 
@@ -47,7 +48,12 @@ export const useTradeStore = create<TradeState>((set, get) => ({
   setQuantity: (quantity) => set({ quantity }),
 
   openTrade: (type, entry, sl, tp, time, customSize) => {
-    const { balance, riskPercent, quantity } = get();
+    const { balance, riskPercent, quantity, activePosition } = get();
+    if (activePosition) {
+      sound.playError();
+      return;
+    }
+
     let size = customSize || quantity;
 
     if (!customSize && sl !== null) {
@@ -56,6 +62,9 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       if (slDistance > 0) {
         size = Math.max(0.01, parseFloat((riskAmount / slDistance).toFixed(2)));
       }
+    } else if (size <= 50) {
+      // Standard lot interpretation (1 lot = 100,000 units)
+      size = size * 100000;
     }
 
     const newPos: Position = {
@@ -83,6 +92,9 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       if (slDistance > 0) {
         size = Math.max(0.01, parseFloat((riskAmount / slDistance).toFixed(2)));
       }
+    } else if (size <= 50) {
+      // Standard lot interpretation
+      size = size * 100000;
     }
 
     const newOrder: PendingOrder = {
@@ -186,7 +198,7 @@ export const useTradeStore = create<TradeState>((set, get) => ({
     });
   },
 
-  setBreakeven: (currentPrice) => {
+  setBreakeven: (_currentPrice?: number) => {
     const { activePosition } = get();
     if (!activePosition) return;
     set({ activePosition: { ...activePosition, sl: activePosition.entry } });
@@ -257,21 +269,25 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       }
     }
 
-    // 2. Check Active Position SL / TP (only if explicitly set)
+    // 2. Check Active Position SL / TP (with realistic gap slippage)
     const pos = get().activePosition;
     if (!pos) return;
 
     if (pos.type === 'LONG') {
       if (pos.sl !== null && low <= pos.sl) {
-        closePosition('SL', pos.sl, time);
+        const execExit = Math.min(open, pos.sl);
+        closePosition('SL', execExit, time);
       } else if (pos.tp !== null && high >= pos.tp) {
-        closePosition('TP', pos.tp, time);
+        const execExit = Math.max(open, pos.tp);
+        closePosition('TP', execExit, time);
       }
     } else if (pos.type === 'SHORT') {
       if (pos.sl !== null && high >= pos.sl) {
-        closePosition('SL', pos.sl, time);
+        const execExit = Math.max(open, pos.sl);
+        closePosition('SL', execExit, time);
       } else if (pos.tp !== null && low <= pos.tp) {
-        closePosition('TP', pos.tp, time);
+        const execExit = Math.min(open, pos.tp);
+        closePosition('TP', execExit, time);
       }
     }
   },
@@ -283,6 +299,17 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       activePosition: null,
       pendingOrders: [],
       closedPositions: [],
+    }),
+
+  restoreTradeState: (restored) =>
+    set({
+      balance: restored.balance !== undefined ? restored.balance : 10000,
+      initialBalance: restored.initialBalance !== undefined ? restored.initialBalance : 10000,
+      riskPercent: restored.riskPercent !== undefined ? restored.riskPercent : 2.0,
+      quantity: restored.quantity !== undefined ? restored.quantity : 1.0,
+      activePosition: restored.activePosition !== undefined ? restored.activePosition : null,
+      pendingOrders: restored.pendingOrders !== undefined ? restored.pendingOrders : [],
+      closedPositions: restored.closedPositions !== undefined ? restored.closedPositions : [],
     }),
 
   getMetrics: () => {

@@ -17,7 +17,7 @@ export function fetchDerivChunk(
     }
 
     timer = setTimeout(() => {
-      try { ws?.close(); } catch (e) {}
+      try { ws?.close(); } catch {}
       reject(new Error('Timeout Deriv WebSocket'));
     }, 8000);
 

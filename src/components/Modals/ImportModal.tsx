@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { UploadCloud, X, FileSpreadsheet } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore, detectBaseTF } from '../../store/useMarketStore';
 import { Candle } from '../../types/market';
@@ -144,7 +145,7 @@ export const ImportModal: React.FC = () => {
               return;
             }
           }
-        } catch (err) {
+        } catch {
           showToast('Erreur de lecture du fichier JSON', 'error');
         }
         return;
@@ -260,15 +261,13 @@ export const ImportModal: React.FC = () => {
     <div id="modal-overlay" className="open" style={{ display: 'flex' }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
       <div id="modal">
         <div className="modal-header">
-          <div className="modal-title">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-            Importer des données
+          <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <UploadCloud size={16} strokeWidth={2} style={{ color: '#38BDF8' }} />
+            <span>Importer des données</span>
           </div>
-          <button className="modal-close" onClick={closeModal}>✕</button>
+          <button className="modal-close" onClick={closeModal} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <X size={15} strokeWidth={2.4} />
+          </button>
         </div>
 
         <div className="symbol-row">
@@ -291,11 +290,8 @@ export const ImportModal: React.FC = () => {
           }}
           style={{ cursor: 'pointer' }}
         >
-          <div className="drop-icon">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-              <polyline points="13 2 13 9 20 9" />
-            </svg>
+          <div className="drop-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <FileSpreadsheet size={32} strokeWidth={1.5} style={{ color: '#38BDF8' }} />
           </div>
           <div className="drop-text" id="drop-filename">{fileName}</div>
           <div className="drop-hint">ou cliquez pour parcourir vos fichiers</div>

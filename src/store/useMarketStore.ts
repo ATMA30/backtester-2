@@ -200,7 +200,7 @@ interface MarketState {
   toggleSound: () => void;
   triggerFitContent: () => void;
   setSeparatorTF: (tf: SeparatorTF) => void;
-  toggleForexSession: (session: 'all' | 'sydney' | 'tokyo' | 'london' | 'newyork') => void;
+  toggleForexSession: (session: 'all' | 'all_kz' | keyof ForexSessionConfig) => void;
   toggleForexLocalTz: () => void;
   addIndicator: (ind: ActiveIndicator) => void;
   removeIndicator: (id: string) => void;
@@ -225,6 +225,12 @@ export const useMarketStore = create<MarketState>((set, get) => ({
     tokyo: false,
     london: false,
     newyork: false,
+    asianRange: false,
+    londonOpenKZ: false,
+    nyOpenKZ: false,
+    londonCloseKZ: false,
+    showHighLow: true,
+    showLabels: true,
     useLocalTz: false,
   },
   activeIndicators: [],
@@ -233,14 +239,16 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   setSymbol: (symbol) => set({ currentSymbol: symbol }),
   setTimeframe: (activeTF) => {
     const { baseCandles, baseTF } = get();
+    if (!baseCandles.length) {
+      set({ activeTF });
+      return;
+    }
     const replayState = useReplayStore.getState();
-
     let sourceCandles = baseCandles;
     if (replayState.isActive && baseCandles.length > 0) {
       const curIdx = Math.min(baseCandles.length - 1, Math.max(0, replayState.currentIndex));
       sourceCandles = baseCandles.slice(0, curIdx + 1);
     }
-
     const aggregated = aggregateCandles(sourceCandles, activeTF, baseTF);
     set({
       activeTF,
@@ -259,7 +267,6 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       activeTF: baseTF,
     });
 
-    // A new dataset invalidates any in-progress replay pointing at the old candle array.
     useReplayStore.getState().resetReplay();
 
     const symbol = get().currentSymbol;
@@ -297,8 +304,14 @@ export const useMarketStore = create<MarketState>((set, get) => ({
         fs.tokyo = !anyOn;
         fs.london = !anyOn;
         fs.newyork = !anyOn;
+      } else if (session === 'all_kz') {
+        const anyOn = fs.asianRange || fs.londonOpenKZ || fs.nyOpenKZ || fs.londonCloseKZ;
+        fs.asianRange = !anyOn;
+        fs.londonOpenKZ = !anyOn;
+        fs.nyOpenKZ = !anyOn;
+        fs.londonCloseKZ = !anyOn;
       } else {
-        fs[session] = !fs[session];
+        (fs as any)[session] = !(fs as any)[session];
       }
       return { forexSessions: fs };
     }),

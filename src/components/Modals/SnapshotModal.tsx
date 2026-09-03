@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Camera, X, Copy, Download } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore } from '../../store/useMarketStore';
 
@@ -25,7 +26,7 @@ export const SnapshotModal: React.FC = () => {
             canvases.forEach((c) => {
               try {
                 ctx.drawImage(c, 0, 0);
-              } catch (e) {}
+              } catch {}
             });
 
             const dpr = window.devicePixelRatio || 1;
@@ -38,7 +39,9 @@ export const SnapshotModal: React.FC = () => {
             ctx.font = `${11 * dpr}px JetBrains Mono, monospace`;
             ctx.fillText(` • ${currentSymbol} • ${new Date().toLocaleDateString('fr-FR')}`, 120 * dpr, (outCanvas.height / dpr - 22) * dpr);
 
-            setLocalUrl(outCanvas.toDataURL('image/png'));
+            requestAnimationFrame(() => {
+              setLocalUrl(outCanvas.toDataURL('image/png'));
+            });
           }
         }
       }
@@ -56,7 +59,7 @@ export const SnapshotModal: React.FC = () => {
       const blob = await res.blob();
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
       showToast('Capture HD copiée dans le presse-papier !', 'success');
-    } catch (e) {
+    } catch {
       showToast('Impossible de copier (permission requise)', 'warning');
     }
   };
@@ -74,8 +77,13 @@ export const SnapshotModal: React.FC = () => {
     <div id="snapshot-modal" className="custom-modal open" style={{ display: 'flex', opacity: 1 }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
       <div className="custom-modal-box snapshot-box" style={{ maxWidth: '820px' }}>
         <div className="custom-modal-header">
-          <div className="custom-modal-title">📸 Capture HD du Graphique</div>
-          <button className="custom-modal-close" onClick={closeModal}>✕</button>
+          <div className="custom-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Camera size={16} strokeWidth={2} style={{ color: '#38BDF8' }} />
+            <span>Capture HD du Graphique</span>
+          </div>
+          <button className="custom-modal-close" onClick={closeModal} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <X size={15} strokeWidth={2.4} />
+          </button>
         </div>
 
         <div className="custom-modal-body snapshot-body" style={{ padding: '16px', textAlign: 'center' }}>
@@ -87,8 +95,22 @@ export const SnapshotModal: React.FC = () => {
         </div>
 
         <div className="custom-modal-actions" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-          <button className="trade-btn buy" style={{ height: '34px', padding: '0 16px' }} onClick={copyToClipboard}>📋 Copier l'image</button>
-          <button className="trade-btn" style={{ height: '34px', padding: '0 16px', background: 'var(--accent)', color: '#FFF' }} onClick={downloadPNG}>📥 Télécharger PNG</button>
+          <button
+            className="trade-btn buy"
+            style={{ height: '34px', padding: '0 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            onClick={copyToClipboard}
+          >
+            <Copy size={13} strokeWidth={2} />
+            <span>Copier l'image</span>
+          </button>
+          <button
+            className="trade-btn"
+            style={{ height: '34px', padding: '0 16px', background: 'var(--accent)', color: '#FFF', display: 'flex', alignItems: 'center', gap: '6px' }}
+            onClick={downloadPNG}
+          >
+            <Download size={13} strokeWidth={2} />
+            <span>Télécharger PNG</span>
+          </button>
           <button className="trade-btn" style={{ height: '34px', padding: '0 14px', background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }} onClick={closeModal}>Fermer</button>
         </div>
       </div>

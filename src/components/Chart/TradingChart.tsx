@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, IChartApi, ISeriesApi } from 'lightweight-charts';
+import { Scissors, History, TrendingUp, UploadCloud, Play } from 'lucide-react';
 import { useMarketStore } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { useUIStore } from '../../store/useUIStore';
@@ -13,7 +14,7 @@ export const TradingChart: React.FC = () => {
   const [chart, setChart] = useState<IChartApi | null>(null);
   const [mainSeries, setMainSeries] = useState<ISeriesApi<'Candlestick' | 'Bar' | 'Line' | 'Area'> | null>(null);
   const [volumeSeries, setVolumeSeries] = useState<ISeriesApi<'Histogram'> | null>(null);
-  const [indicatorSeriesMap, setIndicatorSeriesMap] = useState<Map<string, ISeriesApi<'Line'>>>(new Map());
+  const indicatorSeriesMapRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
   const [size, setSize] = useState({ width: 800, height: 600 });
   const [isLoading, setIsLoading] = useState(false);
   const [hoverCandleInfo, setHoverCandleInfo] = useState<{ x: number; time: number; candle: Candle } | null>(null);
@@ -53,8 +54,8 @@ export const TradingChart: React.FC = () => {
         fontFamily: "'JetBrains Mono', 'Inter', system-ui, sans-serif",
       },
       grid: {
-        vertLines: { color: showGrid ? 'rgba(255, 255, 255, 0.035)' : 'transparent' },
-        horzLines: { color: showGrid ? 'rgba(255, 255, 255, 0.035)' : 'transparent' },
+        vertLines: { color: 'rgba(255, 255, 255, 0.035)' },
+        horzLines: { color: 'rgba(255, 255, 255, 0.035)' },
       },
       crosshair: {
         mode: 1,
@@ -78,7 +79,6 @@ export const TradingChart: React.FC = () => {
     const vSeries = newChart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
-      visible: showVolume,
     });
     newChart.priceScale('volume').applyOptions({
       scaleMargins: { top: 0.72, bottom: 0 },
@@ -113,10 +113,23 @@ export const TradingChart: React.FC = () => {
     };
   }, []);
 
+  // ── UPDATE GRID & VOLUME OPTIONS DYNAMICALLY ──────────────
+  useEffect(() => {
+    if (!chart) return;
+    chart.applyOptions({
+      grid: {
+        vertLines: { color: showGrid ? 'rgba(255, 255, 255, 0.035)' : 'transparent' },
+        horzLines: { color: showGrid ? 'rgba(255, 255, 255, 0.035)' : 'transparent' },
+      },
+    });
+    if (volumeSeries) {
+      volumeSeries.applyOptions({ visible: showVolume });
+    }
+  }, [chart, showGrid, showVolume, volumeSeries]);
+
   // ── UPDATE MAIN SERIES TYPE ───────────────────────────────
   useEffect(() => {
     if (!chart) return;
-    if (mainSeries) chart.removeSeries(mainSeries);
 
     let newMain: ISeriesApi<'Candlestick' | 'Bar' | 'Line' | 'Area'>;
     if (chartType === 'Candlestick') {
@@ -147,7 +160,15 @@ export const TradingChart: React.FC = () => {
       });
     }
 
-    setMainSeries(newMain);
+    requestAnimationFrame(() => {
+      setMainSeries(newMain);
+    });
+
+    return () => {
+      try {
+        chart.removeSeries(newMain);
+      } catch {}
+    };
   }, [chart, chartType]);
 
   // ── SET DATA & INTELLIGENT VIEWPORT MANAGEMENT ────────────
@@ -202,12 +223,12 @@ export const TradingChart: React.FC = () => {
     // Render Indicators
     if (chart) {
       // 1. Remove deleted indicator series
-      indicatorSeriesMap.forEach((s, id) => {
+      indicatorSeriesMapRef.current.forEach((s, id) => {
         if (!activeIndicators.some((i) => i.id === id)) {
           try {
             chart.removeSeries(s);
-          } catch (e) {}
-          indicatorSeriesMap.delete(id);
+          } catch {}
+          indicatorSeriesMapRef.current.delete(id);
         }
       });
 
@@ -219,12 +240,12 @@ export const TradingChart: React.FC = () => {
         chart.priceScale('volume').applyOptions({
           scaleMargins: { top: hasSubPanes ? 0.58 : 0.72, bottom: hasSubPanes ? 0.20 : 0 },
         });
-      } catch (e) {}
+      } catch {}
 
       // 2. Add or update indicators
       activeIndicators.forEach((ind) => {
         try {
-          let s = indicatorSeriesMap.get(ind.id);
+          let s = indicatorSeriesMapRef.current.get(ind.id);
           const isRSI = ind.type === 'RSI';
           const isMACD = ind.type === 'MACD';
           const scaleId = isRSI ? 'rsi_pane' : isMACD ? 'macd_pane' : 'right';
@@ -235,7 +256,7 @@ export const TradingChart: React.FC = () => {
               lineWidth: 2,
               priceScaleId: scaleId,
             });
-            indicatorSeriesMap.set(ind.id, s);
+            indicatorSeriesMapRef.current.set(ind.id, s);
 
             if (scaleId !== 'right') {
               try {
@@ -316,7 +337,6 @@ export const TradingChart: React.FC = () => {
           console.warn(`Error updating indicator ${ind.type}:`, err);
         }
       });
-      setIndicatorSeriesMap(new Map(indicatorSeriesMap));
 
       // Viewport Control
       if (isReplayJustStarted || isReplayJump) {
@@ -333,7 +353,7 @@ export const TradingChart: React.FC = () => {
             from: savedRange.from as any,
             to: savedRange.to as any,
           });
-        } catch (e) {}
+        } catch {}
       } else if (isSymbolChange || !savedRange) {
         lastVisibleRangeRef.current = null;
         chart.timeScale().fitContent();
@@ -533,14 +553,8 @@ export const TradingChart: React.FC = () => {
                 pointerEvents: 'none',
               }}
             >
-              <span style={{ color: '#38BDF8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="6" cy="6" r="3" />
-                  <circle cx="6" cy="18" r="3" />
-                  <line x1="20" y1="4" x2="8.12" y2="15.88" />
-                  <line x1="14.47" y1="14.48" x2="20" y2="20" />
-                  <line x1="8.12" y1="8.12" x2="12" y2="12" />
-                </svg>
+              <span style={{ color: '#38BDF8', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                <Scissors size={12} strokeWidth={2.4} />
                 Couper ici :
               </span>
               <span style={{ fontFamily: 'var(--mono)', color: '#38BDF8' }}>
@@ -562,11 +576,8 @@ export const TradingChart: React.FC = () => {
         {/* Replay Start Hint (Floating Top Glass Banner) */}
         {isPicking && !hoverCandleInfo && (
           <div id="replay-hint">
-            <div className="rh-icon-wrap">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
+            <div className="rh-icon-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <History size={17} strokeWidth={2.2} />
             </div>
             <div className="rh-content">
               <div className="rh-text">Mode Replay : Choisissez le point de départ</div>
@@ -587,23 +598,16 @@ export const TradingChart: React.FC = () => {
         {displayCandles.length === 0 && !isLoading && (
           <div id="welcome-overlay">
             <div className="welcome-content">
-              <div className="welcome-icon">
-                <svg className="welcome-logo-svg" viewBox="0 0 40 40" fill="none" stroke="white" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="5 30 13 19 21 24 33 9" />
-                  <polyline points="28 9 33 9 33 14" />
-                </svg>
+              <div className="welcome-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <TrendingUp size={28} strokeWidth={2.5} style={{ color: '#38BDF8' }} />
               </div>
               <div className="welcome-title">Bienvenue sur <span>TradeView Pro</span></div>
               <div className="welcome-sub">
                 Importez vos données de marché ou connectez les flux en direct pour visualiser les chandeliers, rejouer des sessions et simuler des trades.
               </div>
               <div id="drop-zone" onClick={() => openModal('import')}>
-                <div className="drop-icon">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="17 8 12 3 7 8" />
-                    <line x1="12" y1="3" x2="12" y2="15" />
-                  </svg>
+                <div className="drop-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <UploadCloud size={30} strokeWidth={1.8} style={{ color: '#38BDF8' }} />
                 </div>
                 <div className="drop-text">Glissez un fichier ou cliquez pour parcourir</div>
                 <div className="drop-hint">Colonnes recommandées : date, open, high, low, close, volume</div>
@@ -637,8 +641,10 @@ export const TradingChart: React.FC = () => {
           </>
         )}
         {isReplayActive && (
-          <div className="status-item" id="status-replay">
-            <span className="status-replay-icon">⏯</span>
+          <div className="status-item" id="status-replay" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span className="status-replay-icon" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <Play size={11} strokeWidth={2.4} fill="currentColor" />
+            </span>
             <span id="replay-status-text">Mode Replay</span>
           </div>
         )}

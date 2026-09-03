@@ -19,7 +19,7 @@ interface ReplayState {
   resetReplay: () => void;
 }
 
-export const useReplayStore = create<ReplayState>((set, get) => ({
+export const useReplayStore = create<ReplayState>((set) => ({
   isActive: false,
   isPicking: false,
   isPlaying: false,

@@ -1,4 +1,32 @@
 import React from 'react';
+import {
+  ChevronDown,
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  Database,
+  BarChart2,
+  Grid,
+  Columns,
+  Globe,
+  Maximize2,
+  Minimize2,
+  Camera,
+  Volume2,
+  VolumeX,
+  History,
+  Clock,
+  CandlestickChart,
+  LineChart,
+  AreaChart,
+  SlidersHorizontal,
+  UploadCloud,
+  Trash2,
+  Calendar,
+  CalendarDays,
+  CalendarRange,
+  Slash,
+} from 'lucide-react';
 import { useMarketStore, TIMEFRAME_DEFS } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { useUIStore } from '../../store/useUIStore';
@@ -21,7 +49,6 @@ export const Topbar: React.FC = () => {
     toggleVolume,
     toggleGrid,
     toggleSound,
-    triggerFitContent,
     setSeparatorTF,
     toggleForexSession,
     toggleForexLocalTz,
@@ -42,26 +69,12 @@ export const Topbar: React.FC = () => {
   const currentTFDef = TIMEFRAME_DEFS.find((t) => t.s === activeTF) || { label: '1D' };
   const baseTFDef = TIMEFRAME_DEFS.find((t) => t.s === baseTF) || { label: '1D' };
 
-  const exportCSV = () => {
-    if (!displayCandles.length) return;
-    const header = 'time,open,high,low,close,volume\n';
-    const rows = displayCandles
-      .map((c) => `${c.time},${c.open},${c.high},${c.low},${c.close},${c.volume}`)
-      .join('\n');
-    const blob = new Blob([header + rows], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${currentSymbol}_${currentTFDef.label}_export.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Export CSV téléchargé !', 'success');
-  };
+  const isFullscreen = typeof document !== 'undefined' && Boolean(document.fullscreenElement);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
-      showToast('⛶ Mode Immersion plein écran activé', 'info', 2000);
+      showToast('Mode Immersion plein écran activé', 'info', 2000);
     } else {
       document.exitFullscreen().catch(() => {});
       showToast('Sortie du mode immersion', 'info', 2000);
@@ -100,9 +113,7 @@ export const Topbar: React.FC = () => {
         >
           <span className={`market-badge ${marketBadge.type}`}>{marketBadge.label}</span>
           <span id="ticker-symbol" className="ticker-symbol">{currentSymbol}</span>
-          <svg className="ticker-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
+          <ChevronDown size={12} strokeWidth={2.2} className="ticker-chevron" />
           <div className="ticker-sep" />
           <span id="ticker-price" className="ticker-price">
             {lastPrice > 0 ? lastPrice.toFixed(lastPrice < 10 ? 5 : 2) : '—'}
@@ -111,7 +122,13 @@ export const Topbar: React.FC = () => {
             id="ticker-change"
             className={`ticker-change-pill ${changePercent >= 0 ? 'bull' : 'bear'}`}
           >
-            <span className="ticker-change-arrow">{changePercent >= 0 ? '▲' : '▼'}</span>
+            <span className="ticker-change-arrow">
+              {changePercent >= 0 ? (
+                <TrendingUp size={11} strokeWidth={2.4} />
+              ) : (
+                <TrendingDown size={11} strokeWidth={2.4} />
+              )}
+            </span>
             <span>{changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%</span>
           </span>
         </div>
@@ -122,20 +139,17 @@ export const Topbar: React.FC = () => {
           onClick={() => openModal('live')}
           title="24 ms — Flux en direct connecté (Cliquez pour configurer)"
         >
-          <span className="witness-dot live" />
+          <Activity size={12} strokeWidth={2} style={{ color: '#10B981' }} />
           <span className="witness-label">24 ms</span>
         </div>
 
         <div
           className="topbar-witness-badge"
           onClick={() => openModal('datasets')}
-          title="Base locale — Données synchronisées et sauvegardées"
+          title="Gestionnaire de Sessions de Backtest & Datasets"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" />
-            <polyline points="13 11 16 14 19 11" />
-          </svg>
-          <span className="witness-label">Sauvegardé</span>
+          <Database size={12} strokeWidth={2} style={{ color: '#38BDF8' }} />
+          <span className="witness-label">Sessions</span>
         </div>
 
         <div className="topbar-divider" />
@@ -149,11 +163,7 @@ export const Topbar: React.FC = () => {
             onClick={toggleVolume}
             title={showVolume ? 'Volume histogramme (Activé)' : 'Volume histogramme (Désactivé)'}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="14" width="4" height="6" rx="1" />
-              <rect x="9" y="9" width="4" height="11" rx="1" />
-              <rect x="16" y="4" width="4" height="16" rx="1" />
-            </svg>
+            <BarChart2 size={16} strokeWidth={showVolume ? 2.2 : 1.8} />
           </button>
 
           {/* Grille */}
@@ -163,13 +173,7 @@ export const Topbar: React.FC = () => {
             onClick={toggleGrid}
             title={showGrid ? 'Grille graphique (Activée)' : 'Grille graphique (Désactivée)'}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="3" y1="9" x2="21" y2="9" />
-              <line x1="3" y1="15" x2="21" y2="15" />
-              <line x1="9" y1="3" x2="9" y2="21" />
-              <line x1="15" y1="3" x2="15" y2="21" />
-            </svg>
+            <Grid size={16} strokeWidth={showGrid ? 2.2 : 1.8} />
           </button>
 
           {/* Séparateurs de période & session */}
@@ -180,23 +184,17 @@ export const Topbar: React.FC = () => {
               onClick={() => toggleDropdown('sep')}
               title="Séparateurs de session / période"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="8" y1="3" x2="8" y2="21" />
-                <line x1="16" y1="3" x2="16" y2="21" />
-                <line x1="3" y1="12" x2="5" y2="12" />
-                <line x1="11" y1="12" x2="13" y2="12" />
-                <line x1="19" y1="12" x2="21" y2="12" />
-              </svg>
+              <Columns size={16} strokeWidth={separatorTF ? 2.2 : 1.8} />
             </button>
             {activeDropdown === 'sep' && (
               <div className="tv-dropdown-menu sep-menu show" style={{ display: 'block' }}>
                 <div className="sep-menu-title">Séparateurs de période</div>
                 {[
-                  { tf: null, label: 'Désactivé', icon: '✕' },
-                  { tf: '1D', label: 'Journalier (1D)', icon: '│', cls: 'sep-color-day' },
-                  { tf: '1W', label: 'Hebdomadaire (1W)', icon: '│', cls: 'sep-color-week' },
-                  { tf: '1M', label: 'Mensuel (1M)', icon: '│', cls: 'sep-color-month' },
-                  { tf: '1Y', label: 'Annuel (1Y)', icon: '│', cls: 'sep-color-year' },
+                  { tf: null, label: 'Désactivé', icon: <Slash size={12} strokeWidth={2} /> },
+                  { tf: '1D', label: 'Journalier (1D)', icon: <Calendar size={12} strokeWidth={2} />, cls: 'sep-color-day' },
+                  { tf: '1W', label: 'Hebdomadaire (1W)', icon: <CalendarRange size={12} strokeWidth={2} />, cls: 'sep-color-week' },
+                  { tf: '1M', label: 'Mensuel (1M)', icon: <CalendarDays size={12} strokeWidth={2} />, cls: 'sep-color-month' },
+                  { tf: '1Y', label: 'Annuel (1Y)', icon: <Clock size={12} strokeWidth={2} />, cls: 'sep-color-year' },
                 ].map((s) => (
                   <div
                     key={String(s.tf)}
@@ -206,35 +204,78 @@ export const Topbar: React.FC = () => {
                       closeAllDropdowns();
                       showToast(`Séparateurs : ${s.label}`, 'info', 2000);
                     }}
+                    style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
-                    <span className={`sep-icon ${s.cls || ''}`}>{s.icon}</span> {s.label}
+                    <span className={`sep-icon ${s.cls || ''}`} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                      {s.icon}
+                    </span>
+                    <span>{s.label}</span>
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Sessions Forex */}
+          {/* Sessions Forex & Killzones ICT */}
           <div className="tv-dropdown">
             <button
-              className={`tv-icon-btn ${forexSessions.london || forexSessions.newyork || forexSessions.tokyo || forexSessions.sydney ? 'active' : ''}`}
+              className={`tv-icon-btn ${
+                forexSessions.london ||
+                forexSessions.newyork ||
+                forexSessions.tokyo ||
+                forexSessions.sydney ||
+                forexSessions.asianRange ||
+                forexSessions.londonOpenKZ ||
+                forexSessions.nyOpenKZ ||
+                forexSessions.londonCloseKZ
+                  ? 'active'
+                  : ''
+              }`}
               id="btn-forex"
               onClick={() => toggleDropdown('forex')}
-              title="Sessions Forex & Fuseaux horaires (Londres, New York, Tokyo, Sydney)"
+              title="Sessions de Marché Forex & Killzones ICT / SMC"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9" />
-                <polyline points="12 7 12 12 15.5 15.5" />
-              </svg>
+              <Globe size={16} strokeWidth={1.8} />
             </button>
             {activeDropdown === 'forex' && (
-              <div className="tv-dropdown-menu forex-menu show" style={{ display: 'block', minWidth: '220px' }}>
-                <div className="sep-menu-title">Sessions Forex (UTC)</div>
-                <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('all'); }}>
-                  <span className="forex-dot" style={{ background: 'linear-gradient(90deg,#A78BFA,#FB923C,#60A5FA,#34D399)' }} />
-                  <span style={{ fontWeight: 600 }}>Tout activer / désactiver</span>
+              <div
+                className="tv-dropdown-menu forex-menu show"
+                style={{
+                  display: 'block',
+                  minWidth: '260px',
+                  maxHeight: '440px',
+                  overflowY: 'auto',
+                  padding: '8px',
+                }}
+              >
+                {/* Intraday Notice if on 1D or higher */}
+                {activeTF > 3600 && (
+                  <div
+                    style={{
+                      background: 'rgba(56, 189, 248, 0.1)',
+                      border: '1px solid rgba(56, 189, 248, 0.25)',
+                      borderRadius: '4px',
+                      padding: '8px 10px',
+                      marginBottom: '10px',
+                      fontSize: '11px',
+                      color: '#38BDF8',
+                      lineHeight: '1.4',
+                    }}
+                  >
+                    ℹ️ Les sessions s'affichent sur les unités intraday (≤ 1h). Passez en 1h ou moins pour voir les boîtes de trading.
+                  </div>
+                )}
+
+                {/* 1. Sessions Majeures */}
+                <div className="sep-menu-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Sessions Majeures</span>
+                  <span
+                    style={{ fontSize: '10px', color: 'var(--accent)', cursor: 'pointer' }}
+                    onClick={(e) => { e.stopPropagation(); toggleForexSession('all'); }}
+                  >
+                    Tout basculer
+                  </span>
                 </div>
-                <div className="dropdown-divider" />
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('sydney'); }}>
                   <span className="forex-dot" style={{ background: '#A78BFA' }} />
                   <span className="forex-name">Sydney</span>
@@ -243,7 +284,7 @@ export const Topbar: React.FC = () => {
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('tokyo'); }}>
                   <span className="forex-dot" style={{ background: '#FB923C' }} />
-                  <span className="forex-name">Tokyo</span>
+                  <span className="forex-name">Tokyo / Asie</span>
                   <span className="forex-hours">00h – 09h</span>
                   <input type="checkbox" checked={forexSessions.tokyo} onChange={() => {}} />
                 </div>
@@ -259,10 +300,58 @@ export const Topbar: React.FC = () => {
                   <span className="forex-hours">13h – 22h</span>
                   <input type="checkbox" checked={forexSessions.newyork} onChange={() => {}} />
                 </div>
+
                 <div className="dropdown-divider" />
+
+                {/* 2. Killzones ICT */}
+                <div className="sep-menu-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Killzones ICT / SMC</span>
+                  <span
+                    style={{ fontSize: '10px', color: 'var(--accent)', cursor: 'pointer' }}
+                    onClick={(e) => { e.stopPropagation(); toggleForexSession('all_kz'); }}
+                  >
+                    Tout basculer
+                  </span>
+                </div>
+                <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('asianRange'); }}>
+                  <span className="forex-dot" style={{ background: '#F472B6' }} />
+                  <span className="forex-name">Asian Range</span>
+                  <span className="forex-hours">00h – 06h</span>
+                  <input type="checkbox" checked={forexSessions.asianRange} onChange={() => {}} />
+                </div>
+                <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('londonOpenKZ'); }}>
+                  <span className="forex-dot" style={{ background: '#38BDF8' }} />
+                  <span className="forex-name">London Open KZ</span>
+                  <span className="forex-hours">07h – 10h</span>
+                  <input type="checkbox" checked={forexSessions.londonOpenKZ} onChange={() => {}} />
+                </div>
+                <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('nyOpenKZ'); }}>
+                  <span className="forex-dot" style={{ background: '#4ADE80' }} />
+                  <span className="forex-name">NY Open KZ</span>
+                  <span className="forex-hours">12h – 15h</span>
+                  <input type="checkbox" checked={forexSessions.nyOpenKZ} onChange={() => {}} />
+                </div>
+                <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('londonCloseKZ'); }}>
+                  <span className="forex-dot" style={{ background: '#FBBF24' }} />
+                  <span className="forex-name">London Close KZ</span>
+                  <span className="forex-hours">15h – 17h</span>
+                  <input type="checkbox" checked={forexSessions.londonCloseKZ} onChange={() => {}} />
+                </div>
+
+                <div className="dropdown-divider" />
+
+                {/* 3. Options d'affichage & Fuseaux */}
+                <div className="sep-menu-title">Options d'Affichage</div>
+                <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('showHighLow'); }}>
+                  <span className="forex-name">Niveaux High & Low</span>
+                  <input type="checkbox" checked={forexSessions.showHighLow !== false} onChange={() => {}} />
+                </div>
+                <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('showLabels'); }}>
+                  <span className="forex-name">Badges de Session</span>
+                  <input type="checkbox" checked={forexSessions.showLabels !== false} onChange={() => {}} />
+                </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexLocalTz(); }}>
-                  <span className="forex-dot" style={{ background: 'var(--gold)' }} />
-                  <span className="forex-name">Mon fuseau horaire</span>
+                  <span className="forex-name">Mon fuseau horaire ({Intl.DateTimeFormat().resolvedOptions().timeZone})</span>
                   <input type="checkbox" checked={forexSessions.useLocalTz} onChange={() => {}} />
                 </div>
               </div>
@@ -276,9 +365,7 @@ export const Topbar: React.FC = () => {
             onClick={toggleFullscreen}
             title="Mode Immersion / Plein Écran (F)"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
-            </svg>
+            {isFullscreen ? <Minimize2 size={16} strokeWidth={1.8} /> : <Maximize2 size={16} strokeWidth={1.8} />}
           </button>
 
           {/* Capture d'écran HD */}
@@ -288,10 +375,7 @@ export const Topbar: React.FC = () => {
             onClick={() => openModal('snapshot')}
             title="Capture d'écran HD (P)"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-              <circle cx="12" cy="13" r="4" />
-            </svg>
+            <Camera size={16} strokeWidth={1.8} />
           </button>
 
           {/* Sons de trading */}
@@ -301,10 +385,7 @@ export const Topbar: React.FC = () => {
             onClick={toggleSound}
             title={soundEnabled ? 'Effets sonores (Activés)' : 'Effets sonores (Désactivés / Muet)'}
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-            </svg>
+            {soundEnabled ? <Volume2 size={16} strokeWidth={1.8} /> : <VolumeX size={16} strokeWidth={1.8} />}
           </button>
         </div>
 
@@ -328,14 +409,10 @@ export const Topbar: React.FC = () => {
             }}
             title="Mode Replay temporel (Raccourci : Espace)"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="9" />
-              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none" />
-            </svg>
+            <History size={16} strokeWidth={2.2} />
           </button>
         </div>
       </div>
-
       {/* Right group: selectors + import */}
       <div className="topbar-right">
         {/* Timeframe picker */}
@@ -344,11 +421,11 @@ export const Topbar: React.FC = () => {
             className="tv-dropdown-btn"
             id="btn-active-tf"
             onClick={() => toggleDropdown('tf')}
+            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
           >
+            <Clock size={12} strokeWidth={2} style={{ color: 'var(--text-secondary)' }} />
             <span>{currentTFDef.label}</span>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+            <ChevronDown size={11} strokeWidth={2.5} />
           </button>
           {activeDropdown === 'tf' && (
             <div className="tv-dropdown-menu show" style={{ display: 'block', minWidth: '170px' }}>
@@ -396,7 +473,12 @@ export const Topbar: React.FC = () => {
             className="tv-dropdown-btn"
             id="btn-active-ctype"
             onClick={() => toggleDropdown('ctype')}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
+            {chartType === 'Candlestick' && <CandlestickChart size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
+            {chartType === 'Bar' && <BarChart2 size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
+            {chartType === 'Line' && <LineChart size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
+            {chartType === 'Area' && <AreaChart size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
             <span>
               {chartType === 'Candlestick'
                 ? 'Chandeliers'
@@ -406,28 +488,29 @@ export const Topbar: React.FC = () => {
                 ? 'Ligne'
                 : 'Aire'}
             </span>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+            <ChevronDown size={11} strokeWidth={2.5} />
           </button>
           {activeDropdown === 'ctype' && (
-            <div className="tv-dropdown-menu show" style={{ display: 'block' }}>
-              {(['Candlestick', 'Bar', 'Line', 'Area'] as const).map((type) => (
+            <div className="tv-dropdown-menu show" style={{ display: 'block', minWidth: '150px' }}>
+              {[
+                { type: 'Candlestick' as const, label: 'Chandeliers', icon: <CandlestickChart size={13} strokeWidth={2} /> },
+                { type: 'Bar' as const, label: 'Barres', icon: <BarChart2 size={13} strokeWidth={2} /> },
+                { type: 'Line' as const, label: 'Ligne', icon: <LineChart size={13} strokeWidth={2} /> },
+                { type: 'Area' as const, label: 'Aire', icon: <AreaChart size={13} strokeWidth={2} /> },
+              ].map((item) => (
                 <div
-                  key={type}
-                  className={`tv-dropdown-item ${chartType === type ? 'active' : ''}`}
+                  key={item.type}
+                  className={`tv-dropdown-item ${chartType === item.type ? 'active' : ''}`}
                   onClick={() => {
-                    setChartType(type);
+                    setChartType(item.type);
                     closeAllDropdowns();
                   }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
-                  {type === 'Candlestick'
-                    ? 'Chandeliers'
-                    : type === 'Bar'
-                    ? 'Barres'
-                    : type === 'Line'
-                    ? 'Ligne'
-                    : 'Aire'}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', color: chartType === item.type ? '#3B82F6' : 'inherit' }}>
+                    {item.icon}
+                  </span>
+                  <span>{item.label}</span>
                 </div>
               ))}
             </div>
@@ -440,11 +523,27 @@ export const Topbar: React.FC = () => {
             className="tv-dropdown-btn"
             id="btn-indicators"
             onClick={() => toggleDropdown('indicators')}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            <span>ƒx Indicateurs</span>
+            <SlidersHorizontal size={13} strokeWidth={2} style={{ color: activeIndicators.length > 0 ? '#3B82F6' : 'inherit' }} />
+            <span>Indicateurs</span>
+            {activeIndicators.length > 0 && (
+              <span style={{
+                background: 'rgba(59, 130, 246, 0.2)',
+                color: '#60A5FA',
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '1px 5px',
+                borderRadius: '10px',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
+              }}>
+                {activeIndicators.length}
+              </span>
+            )}
+            <ChevronDown size={11} strokeWidth={2.5} />
           </button>
           {activeDropdown === 'indicators' && (
-            <div className="tv-dropdown-menu show" style={{ minWidth: '230px', display: 'block', padding: '6px' }}>
+            <div className="tv-dropdown-menu show" style={{ minWidth: '240px', display: 'block', padding: '6px' }}>
               <div className="dropdown-section-label" style={{ color: '#3B82F6', fontWeight: 700, padding: '4px 8px', fontSize: '10.5px', letterSpacing: '0.8px' }}>
                 TENDANCE
               </div>
@@ -503,7 +602,13 @@ export const Topbar: React.FC = () => {
                   activeIndicators.map((i) => (
                     <div key={i.id} className="active-ind-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.04)', marginBottom: '3px' }}>
                       <span style={{ fontSize: '11.5px', fontWeight: 600, color: i.color }}>{i.type} ({i.period})</span>
-                      <button onClick={(e) => { e.stopPropagation(); removeIndicator(i.id); }} style={{ background: 'none', border: 'none', color: '#F43F5E', cursor: 'pointer', fontWeight: 700 }}>✕</button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removeIndicator(i.id); }}
+                        title="Supprimer cet indicateur"
+                        style={{ background: 'none', border: 'none', color: '#F43F5E', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                      >
+                        <Trash2 size={12} strokeWidth={2} />
+                      </button>
                     </div>
                   ))
                 )}
@@ -513,14 +618,9 @@ export const Topbar: React.FC = () => {
         </div>
 
         {/* Import button */}
-        <button id="upload-btn" onClick={() => openModal('import')}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="18" x2="12" y2="12" />
-            <polyline points="9 15 12 18 15 15" />
-          </svg>
-          Importer
+        <button id="upload-btn" onClick={() => openModal('import')} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <UploadCloud size={14} strokeWidth={2.2} />
+          <span>Importer</span>
         </button>
       </div>
     </div>

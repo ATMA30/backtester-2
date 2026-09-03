@@ -1,4 +1,5 @@
 import React from 'react';
+import { Keyboard, X } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 
 export const ShortcutsModal: React.FC = () => {
@@ -9,9 +10,14 @@ export const ShortcutsModal: React.FC = () => {
   return (
     <div id="shortcuts-overlay" className="open" style={{ display: 'flex', opacity: 1 }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
       <div className="shortcuts-box">
-        <div className="shortcuts-title">
-          Raccourcis clavier
-          <button className="shortcuts-close" onClick={closeModal}>✕</button>
+        <div className="shortcuts-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Keyboard size={16} strokeWidth={2} style={{ color: '#38BDF8' }} />
+            <span>Raccourcis clavier</span>
+          </div>
+          <button className="shortcuts-close" onClick={closeModal} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <X size={15} strokeWidth={2.4} />
+          </button>
         </div>
 
         <div className="shortcuts-section">

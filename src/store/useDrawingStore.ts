@@ -48,6 +48,7 @@ interface DrawingState {
   setCurrentStyle: (style: Partial<DrawingStyle>) => void;
   undo: () => void;
   redo: () => void;
+  restoreDrawings: (drawings: Drawing[], symbol?: string) => void;
 }
 
 const initialDrawingsBySymbol = loadStoredDrawingsBySymbol();
@@ -180,6 +181,19 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
         selectedDrawingId: null,
       });
     }
+  },
+
+  restoreDrawings: (drawings: Drawing[], symbol?: string) => {
+    const sym = symbol || get().activeSymbol;
+    const updatedMap = { ...get().drawingsBySymbol, [sym]: drawings };
+    persistAll(updatedMap);
+    set({
+      drawings,
+      drawingsBySymbol: updatedMap,
+      history: [drawings],
+      historyIndex: 0,
+      selectedDrawingId: null,
+    });
   },
 
   redo: () => {

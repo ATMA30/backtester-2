@@ -1,4 +1,5 @@
 import React from 'react';
+import { Download, X, BookOpen } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useTradeStore } from '../../store/useTradeStore';
 
@@ -51,10 +52,26 @@ export const TradeHistoryModal: React.FC = () => {
   return (
     <div id="trade-history-panel" className="open" style={{ display: 'flex' }}>
       <div className="th-header">
-        <div className="th-title">Journal de trades</div>
+        <div className="th-title" style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+          <BookOpen size={15} strokeWidth={2} style={{ color: '#38BDF8' }} />
+          <span>Journal de trades</span>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <button className="th-export" onClick={exportTradeHistory} title="Exporter CSV">📥</button>
-          <button className="th-close" onClick={closeModal}>✕</button>
+          <button
+            className="th-export"
+            onClick={exportTradeHistory}
+            title="Exporter CSV"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <Download size={13} strokeWidth={2} />
+          </button>
+          <button
+            className="th-close"
+            onClick={closeModal}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <X size={14} strokeWidth={2.4} />
+          </button>
         </div>
       </div>
 
