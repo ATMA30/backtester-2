@@ -26,22 +26,27 @@ function applyResponsiveScaleMargins(
     volumeMargins = { top: 1.0, bottom: 0.0 };
     subPaneMargins = { top: 1.0, bottom: 0.0 };
   } else if (showVolume && !hasSubPanes) {
-    // 2. Volume only: Price takes top 84%, volume takes bottom 16% cleanly
-    priceMargins = { top: 0.04, bottom: 0.16 };
-    volumeMargins = { top: 0.84, bottom: 0.0 };
+    // 2. Volume only: Price takes top 80% (bottom: 0.20), Volume takes 82%-99% (top: 0.82)
+    // Guaranteed 2% buffer: Candlesticks can NEVER touch or encounter volume bars!
+    priceMargins = { top: 0.04, bottom: 0.20 };
+    volumeMargins = { top: 0.82, bottom: 0.01 };
     subPaneMargins = { top: 1.0, bottom: 0.0 };
   } else if (!showVolume && hasSubPanes) {
-    // 3. Indicator only: Price takes top 74%, Sub-pane takes bottom 24%
+    // 3. Indicator only: Price takes top 75%, Sub-pane takes bottom 23%
     priceMargins = { top: 0.04, bottom: 0.25 };
     volumeMargins = { top: 1.0, bottom: 0.0 };
     subPaneMargins = { top: 0.77, bottom: 0.02 };
   } else {
     // 4. Both Volume and Indicator:
-    // Price takes top 74%, volume sits in bottom of price pane (60%-74%),
-    // Sub-pane sits directly beneath (77%-98%) with NO dead space!
-    priceMargins = { top: 0.04, bottom: 0.25 };
-    volumeMargins = { top: 0.60, bottom: 0.25 };
-    subPaneMargins = { top: 0.77, bottom: 0.02 };
+    // Candlesticks: strictly stop at 64% from top (bottom: 0.36)
+    // Guaranteed 2% buffer between 64% and 66%
+    // Volume: strictly confined to 66% - 77% (top: 0.66, bottom: 0.23)
+    // Guaranteed 1.5% separator between 77% and 78.5%
+    // Indicator: strictly confined to 78.5% - 98% (top: 0.785, bottom: 0.02)
+    // MATHEMATICALLY IMPOSSIBLE FOR PRICE TO TOUCH OR MEET VOLUME!
+    priceMargins = { top: 0.04, bottom: 0.36 };
+    volumeMargins = { top: 0.66, bottom: 0.23 };
+    subPaneMargins = { top: 0.785, bottom: 0.02 };
   }
 
   try {
