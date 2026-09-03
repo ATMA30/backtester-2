@@ -130,7 +130,18 @@ function marketDataPlugin(): Plugin {
               const inst = symbol.includes('XAG') || symbol.includes('SILVER') ? 'xagusd' : 'xauusd';
               const tf = interval === '1d' ? 'd1' : interval === '1h' ? 'h1' : interval === '15m' ? 'm15' : interval === '5m' ? 'm5' : 'm1';
               const toD = new Date().toISOString().slice(0, 10);
-              const fromD = interval === '1d' ? '2016-01-01' : '2024-01-01';
+              const now = new Date();
+              const fromD =
+                interval === '1m'
+                  ? new Date(now.getTime() - 7 * 86400 * 1000).toISOString().slice(0, 10)
+                  : interval === '5m' || interval === '3m'
+                  ? new Date(now.getTime() - 30 * 86400 * 1000).toISOString().slice(0, 10)
+                  : interval === '15m' || interval === '30m'
+                  ? new Date(now.getTime() - 60 * 86400 * 1000).toISOString().slice(0, 10)
+                  : interval === '1h' || interval === '4h'
+                  ? new Date(now.getTime() - 365 * 86400 * 1000).toISOString().slice(0, 10)
+                  : '2016-01-01';
+
               const rates = await getHistoricalRates({
                 instrument: inst,
                 dates: { from: fromD, to: toD },
@@ -174,9 +185,17 @@ function marketDataPlugin(): Plugin {
           const url = new URL(req.url || '', `http://${req.headers.host}`);
           const rawSym = url.searchParams.get('symbol') || 'eurusd';
           const instrument = rawSym.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-          const from = url.searchParams.get('from') || '2024-01-01';
-          const to = url.searchParams.get('to') || new Date().toISOString().slice(0, 10);
           const timeframe = url.searchParams.get('timeframe') || 'h1';
+          const now = new Date();
+          const defaultFrom =
+            timeframe === 'm1'
+              ? new Date(now.getTime() - 7 * 86400 * 1000).toISOString().slice(0, 10)
+              : timeframe === 'm5' || timeframe === 'm15' || timeframe === 'm30'
+              ? new Date(now.getTime() - 60 * 86400 * 1000).toISOString().slice(0, 10)
+              : '2024-01-01';
+
+          const from = url.searchParams.get('from') || defaultFrom;
+          const to = url.searchParams.get('to') || now.toISOString().slice(0, 10);
 
           const data = await getHistoricalRates({
             instrument,
