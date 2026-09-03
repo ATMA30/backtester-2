@@ -4,7 +4,6 @@ import {
   MousePointer,
   ArrowUpRight,
   Square,
-  Percent,
   Layers,
   Type,
   Trash2,
@@ -327,7 +326,20 @@ export const DrawingSidebar: React.FC = () => {
         title="Retracement de Fibonacci (6)"
         onClick={() => setActiveTool('fib')}
       >
-        <Percent size={14} strokeWidth={activeTool === 'fib' ? 2.4 : 1.9} />
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          {/* Top Level (0.0) */}
+          <line x1="2" y1="4" x2="22" y2="4" stroke="#94A3B8" strokeWidth="1.8" strokeLinecap="round" />
+          {/* Mid Level (0.382) */}
+          <line x1="2" y1="9" x2="22" y2="9" stroke="#F59E0B" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="3 2" />
+          {/* Golden Level (0.618) - Prominent Gold */}
+          <line x1="2" y1="14" x2="22" y2="14" stroke="#EAB308" strokeWidth="2.2" strokeLinecap="round" />
+          {/* Bottom Level (1.0) */}
+          <line x1="2" y1="20" x2="22" y2="20" stroke="#3B82F6" strokeWidth="1.8" strokeLinecap="round" />
+          {/* Dynamic Trend Anchor */}
+          <line x1="4" y1="19" x2="20" y2="5" stroke="#60A5FA" strokeWidth="2" strokeLinecap="round" />
+          <circle cx="4" cy="19" r="2.2" fill="#3B82F6" />
+          <circle cx="20" cy="5" r="2.2" fill="#60A5FA" />
+        </svg>
       </button>
 
       {/* Trend Channel */}
@@ -337,7 +349,7 @@ export const DrawingSidebar: React.FC = () => {
         title="Canal parallèle de tendance (8)"
         onClick={() => setActiveTool('channel')}
       >
-        <Layers size={15} strokeWidth={activeTool === 'channel' ? 2.2 : 1.8} />
+        <Layers size={17} strokeWidth={activeTool === 'channel' ? 2.4 : 1.9} />
       </button>
 
       <div className="draw-sep-h" />
@@ -349,10 +361,15 @@ export const DrawingSidebar: React.FC = () => {
         title="Position Long / Ratio R:R (9)"
         onClick={() => setActiveTool('pos_long')}
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="8" rx="1" fill="rgba(0,196,110,0.25)" stroke="#00C46E" />
-          <rect x="3" y="11" width="18" height="10" rx="1" fill="rgba(244,63,94,0.25)" stroke="#F43F5E" />
-          <line x1="3" y1="11" x2="21" y2="11" stroke="#3B82F6" strokeWidth="2" />
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          {/* Profit Zone (Top Green) */}
+          <rect x="3" y="3" width="18" height="8.5" rx="1.5" fill="rgba(16, 185, 129, 0.4)" stroke="#10B981" strokeWidth="1.8" />
+          {/* Loss Zone (Bottom Red) */}
+          <rect x="3" y="12.5" width="18" height="8.5" rx="1.5" fill="rgba(244, 63, 94, 0.4)" stroke="#F43F5E" strokeWidth="1.8" />
+          {/* White Entry Line */}
+          <line x1="2" y1="12" x2="22" y2="12" stroke="#FFFFFF" strokeWidth="2.2" strokeLinecap="round" />
+          {/* Bold Green Target Arrow UP */}
+          <path d="M12 9V4.5M9 7L12 4L15 7" stroke="#10B981" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
 
@@ -363,10 +380,15 @@ export const DrawingSidebar: React.FC = () => {
         title="Position Short / Ratio R:R (0)"
         onClick={() => setActiveTool('pos_short')}
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="10" rx="1" fill="rgba(244,63,94,0.25)" stroke="#F43F5E" />
-          <rect x="3" y="13" width="18" height="8" rx="1" fill="rgba(0,196,110,0.25)" stroke="#00C46E" />
-          <line x1="3" y1="13" x2="21" y2="13" stroke="#F59E0B" strokeWidth="2" />
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          {/* Loss Zone (Top Red) */}
+          <rect x="3" y="3" width="18" height="8.5" rx="1.5" fill="rgba(244, 63, 94, 0.4)" stroke="#F43F5E" strokeWidth="1.8" />
+          {/* Profit Zone (Bottom Green) */}
+          <rect x="3" y="12.5" width="18" height="8.5" rx="1.5" fill="rgba(16, 185, 129, 0.4)" stroke="#10B981" strokeWidth="1.8" />
+          {/* White Entry Line */}
+          <line x1="2" y1="12" x2="22" y2="12" stroke="#FFFFFF" strokeWidth="2.2" strokeLinecap="round" />
+          {/* Bold Green Target Arrow DOWN */}
+          <path d="M12 15V19.5M9 17L12 20L15 17" stroke="#10B981" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
 

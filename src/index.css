@@ -751,8 +751,8 @@ html, body {
 /* Drawing Action Buttons */
 .draw-btn {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: 1px solid transparent;
   background: transparent;
@@ -773,8 +773,8 @@ html, body {
 }
 
 .draw-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 17px;
+  height: 17px;
   flex-shrink: 0;
 }
 

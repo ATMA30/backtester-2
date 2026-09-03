@@ -27,15 +27,17 @@ import {
   CalendarRange,
   Slash,
 } from 'lucide-react';
-import { useMarketStore, TIMEFRAME_DEFS } from '../../store/useMarketStore';
+import { useMarketStore, TIMEFRAME_DEFS, detectBaseTF, ALL_MARKET_PAIRS } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { useUIStore } from '../../store/useUIStore';
+import { fetchHistoricalData } from '../../services/historicalApi';
 
 export const Topbar: React.FC = () => {
   const {
     currentSymbol,
     activeTF,
     baseTF,
+    baseCandles,
     chartType,
     showVolume,
     showGrid,
@@ -45,6 +47,7 @@ export const Topbar: React.FC = () => {
     activeIndicators,
     displayCandles,
     setTimeframe,
+    setBaseCandles,
     setChartType,
     toggleVolume,
     toggleGrid,
@@ -67,7 +70,6 @@ export const Topbar: React.FC = () => {
       : 0;
 
   const currentTFDef = TIMEFRAME_DEFS.find((t) => t.s === activeTF) || { label: '1D' };
-  const baseTFDef = TIMEFRAME_DEFS.find((t) => t.s === baseTF) || { label: '1D' };
 
   const isFullscreen = typeof document !== 'undefined' && Boolean(document.fullscreenElement);
 
@@ -435,28 +437,192 @@ export const Topbar: React.FC = () => {
                   return (
                     <div
                       key={t.s}
-                      className={`tv-dropdown-item ${t.s === activeTF ? 'active' : ''} ${!isAvailable ? 'disabled' : ''}`}
-                      onClick={() => {
-                        if (!isAvailable) {
-                          showToast(`Timeframe ${t.label} indisponible (base du dataset : ${baseTFDef.label})`, 'warning', 2500);
+                      className={`tv-dropdown-item ${t.s === activeTF ? 'active' : ''}`}
+                      onClick={async () => {
+                        if (isAvailable) {
+                          // Special guard: If returning to Daily/Weekly/Monthly (>= 86400) from an intraday dataset (< 86400),
+                          // restore the full 27-year Master Daily dataset so D1 data never shrinks!
+                          if (t.s >= 86400 && baseTF < 86400) {
+                            closeAllDropdowns();
+                            const replayState = useReplayStore.getState();
+                            const prevCutTime = replayState.isActive && baseCandles[replayState.currentIndex]?.time
+                              ? baseCandles[replayState.currentIndex].time
+                              : null;
+
+                            const { restoreDailyDataset } = useMarketStore.getState();
+                            const restored = restoreDailyDataset(t.s);
+                            if (restored) {
+                              const { baseCandles: newDaily } = useMarketStore.getState();
+                              if (prevCutTime) {
+                                const newIdx = newDaily.findIndex((c) => c.time >= prevCutTime);
+                                const snappedIdx = newIdx !== -1 ? newIdx : newDaily.length - 1;
+                                useReplayStore.setState({ isActive: true, currentIndex: snappedIdx, startIndex: snappedIdx });
+                              }
+                              showToast(`🟢 ${currentSymbol} : Historique complet 1D restauré (${newDaily.length.toLocaleString()} bougies - 1999 → 2026)`, 'success', 3000);
+                              return;
+                            }
+
+                            // If not in cache, fetch full multi-decade history
+                            showToast(`Restauration de l'historique complet 1D pour ${currentSymbol}...`, 'info', 2500);
+                            try {
+                              const dailyCandles = await fetchHistoricalData(currentSymbol, '1d', 'max');
+                              if (dailyCandles && dailyCandles.length > 500) {
+                                setBaseCandles(dailyCandles, 86400);
+                                setTimeframe(t.s);
+                                if (prevCutTime) {
+                                  const newIdx = dailyCandles.findIndex((c) => c.time >= prevCutTime);
+                                  const snappedIdx = newIdx !== -1 ? newIdx : dailyCandles.length - 1;
+                                  useReplayStore.setState({ isActive: true, currentIndex: snappedIdx, startIndex: snappedIdx });
+                                }
+                                showToast(`🟢 ${currentSymbol} : ${dailyCandles.length.toLocaleString()} bougies 1D restaurées (27 ans d'historique)`, 'success', 3500);
+                              }
+                            } catch (err) {
+                              console.warn('Failed to restore daily dataset:', err);
+                            }
+                            return;
+                          }
+
+                          setTimeframe(t.s);
+                          closeAllDropdowns();
+                          showToast(`Timeframe : ${t.label}`, 'info', 1500);
                           return;
                         }
-                        setTimeframe(t.s);
+
+                        // 1. Check if dataset is an imported file or custom offline dataset
+                        const isMarketPair = ALL_MARKET_PAIRS.some((p) => p.symbol === currentSymbol);
+                        const currentBaseDef = TIMEFRAME_DEFS.find((d) => d.s === baseTF) || { label: '1D' };
+
+                        if (!isMarketPair) {
+                          closeAllDropdowns();
+                          showToast(
+                            `⚠️ Timeframe ${t.label} indisponible : ce fichier importé (${currentSymbol}) a une base fixe en ${currentBaseDef.label}. Impossible de descendre sous la résolution du fichier.`,
+                            'warning',
+                            4500
+                          );
+                          return;
+                        }
+
+                        // 2. Online Market Pair: download anchored at exact replay moment if replay is active
+                        const tfCode =
+                          t.s <= 60 ? '1m' :
+                          t.s <= 300 ? '5m' :
+                          t.s <= 900 ? '15m' :
+                          t.s <= 1800 ? '30m' :
+                          t.s <= 3600 ? '1h' :
+                          t.s <= 14400 ? '4h' : '1d';
+
+                        const replayState = useReplayStore.getState();
+                        const prevCutTime = replayState.isActive && baseCandles[replayState.currentIndex]?.time
+                          ? baseCandles[replayState.currentIndex].time
+                          : null;
+
                         closeAllDropdowns();
-                        showToast(`Timeframe : ${t.label}`, 'info', 1500);
+                        showToast(
+                          prevCutTime
+                            ? `Recherche ${t.label} au moment précis du Replay (${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')})...`
+                            : `Téléchargement de ${currentSymbol} en ${t.label} (10 000 barres)...`,
+                          'info',
+                          3000
+                        );
+
+                        try {
+                          const candles = await fetchHistoricalData(currentSymbol, tfCode, 'max', prevCutTime || undefined);
+                          if (!candles || candles.length === 0) {
+                            showToast(`⚠️ Données ${t.label} indisponibles pour ${currentSymbol}`, 'warning', 3000);
+                            return;
+                          }
+
+                          // If in replay, verify if the downloaded candles cover the replay cut date with enough past context
+                          if (prevCutTime) {
+                            const firstTime = candles[0].time;
+                            const lastTime = candles[candles.length - 1].time;
+                            const cutDateStr = new Date(prevCutTime * 1000).toLocaleDateString('fr-FR');
+                            const firstDateStr = new Date(firstTime * 1000).toLocaleDateString('fr-FR');
+
+                            if (prevCutTime < firstTime) {
+                              showToast(
+                                `⚠️ Archives intrajournalières insuffisantes : le flux ${t.label} de ${currentSymbol} démarre le ${firstDateStr}. Impossible de rejouer en ${t.label} au ${cutDateStr}. Le Replay reste en ${currentTFDef.label} (27 ans d'historique).`,
+                                'warning',
+                                6000
+                              );
+                              return;
+                            }
+
+                            if (prevCutTime > lastTime) {
+                              showToast(
+                                `⚠️ Le flux ${t.label} s'arrête le ${new Date(lastTime * 1000).toLocaleDateString('fr-FR')}. Le Replay reste en ${currentTFDef.label}.`,
+                                'warning',
+                                5000
+                              );
+                              return;
+                            }
+
+                            const newIdx = candles.findIndex((c) => c.time >= prevCutTime);
+                            if (newIdx < 15) {
+                              showToast(
+                                `⚠️ Historique insuffisant avant le ${cutDateStr} en ${t.label} (seulement ${newIdx} bougies). Le Replay reste en ${currentTFDef.label}.`,
+                                'warning',
+                                5000
+                              );
+                              return;
+                            }
+
+                            const detectedTF = detectBaseTF(candles);
+                            setBaseCandles(candles, detectedTF);
+                            setTimeframe(t.s >= detectedTF ? t.s : detectedTF);
+
+                            useReplayStore.setState({
+                              isActive: true,
+                              currentIndex: newIdx,
+                              startIndex: newIdx,
+                            });
+
+                            showToast(
+                              `🟢 ${currentSymbol} (${t.label}) : synchronisé au moment précis du Replay (${cutDateStr}) !`,
+                              'success',
+                              3500
+                            );
+                            return;
+                          }
+
+                          const detectedTF = detectBaseTF(candles);
+                          setBaseCandles(candles, detectedTF);
+                          setTimeframe(t.s >= detectedTF ? t.s : detectedTF);
+
+                          showToast(
+                            `🟢 ${currentSymbol} (${t.label}) : ${candles.length.toLocaleString()} barres prêtes pour le Replay`,
+                            'success',
+                            3500
+                          );
+                        } catch (err) {
+                          console.warn('Dynamic TF download error:', err);
+                          showToast(`Erreur lors du téléchargement en ${t.label}`, 'error', 3000);
+                        }
                       }}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        opacity: isAvailable ? 1 : 0.35,
-                        cursor: isAvailable ? 'pointer' : 'not-allowed',
+                        cursor: 'pointer',
+                        opacity: isAvailable ? 1 : 0.9,
                       }}
                     >
-                      <span>{t.label}</span>
+                      <span style={{ fontWeight: isAvailable ? 600 : 400 }}>{t.label}</span>
                       {!isAvailable && (
-                        <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                          indisponible
+                        <span
+                          style={{
+                            fontSize: '9px',
+                            color: '#60A5FA',
+                            background: 'rgba(59, 130, 246, 0.15)',
+                            border: '1px solid rgba(59, 130, 246, 0.3)',
+                            borderRadius: '3px',
+                            padding: '1px 5px',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.4px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          ⬇ Télécharger (~7 mois)
                         </span>
                       )}
                     </div>

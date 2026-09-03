@@ -55,6 +55,7 @@ export const useTradeStore = create<TradeState>((set, get) => ({
     }
 
     let size = customSize || quantity;
+    const isForex = entry < 200; // Forex pairs (EUR/USD ~1.08, USD/JPY ~155)
 
     if (!customSize && sl !== null) {
       const riskAmount = (balance * riskPercent) / 100;
@@ -62,8 +63,8 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       if (slDistance > 0) {
         size = Math.max(0.01, parseFloat((riskAmount / slDistance).toFixed(2)));
       }
-    } else if (size <= 50) {
-      // Standard lot interpretation (1 lot = 100,000 units)
+    } else if (size <= 50 && isForex) {
+      // Standard Forex lot interpretation (1 lot = 100,000 units)
       size = size * 100000;
     }
 
@@ -85,6 +86,7 @@ export const useTradeStore = create<TradeState>((set, get) => ({
   placePendingOrder: (type, orderType, targetPrice, sl, tp, time, customSize) => {
     const { balance, riskPercent, quantity, pendingOrders } = get();
     let size = customSize || quantity;
+    const isForex = targetPrice < 200;
 
     if (!customSize && sl !== null) {
       const riskAmount = (balance * riskPercent) / 100;
@@ -92,8 +94,8 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       if (slDistance > 0) {
         size = Math.max(0.01, parseFloat((riskAmount / slDistance).toFixed(2)));
       }
-    } else if (size <= 50) {
-      // Standard lot interpretation
+    } else if (size <= 50 && isForex) {
+      // Standard Forex lot interpretation
       size = size * 100000;
     }
 
@@ -320,6 +322,23 @@ export const useTradeStore = create<TradeState>((set, get) => ({
     const totalWins = wins.reduce((acc, p) => acc + (p.pnl || 0), 0);
     const totalLosses = Math.abs(losses.reduce((acc, p) => acc + (p.pnl || 0), 0));
 
+    // Calculate authentic Maximum Drawdown from closed trades equity curve
+    let peak = initialBalance;
+    let maxDd = 0;
+    let runningBalance = initialBalance;
+
+    const chronoPositions = [...closedPositions].reverse();
+    for (const pos of chronoPositions) {
+      runningBalance += pos.pnl || 0;
+      if (runningBalance > peak) {
+        peak = runningBalance;
+      }
+      const dd = peak > 0 ? ((peak - runningBalance) / peak) * 100 : 0;
+      if (dd > maxDd) {
+        maxDd = dd;
+      }
+    }
+
     return {
       balance,
       initialBalance,
@@ -328,7 +347,7 @@ export const useTradeStore = create<TradeState>((set, get) => ({
       losingTrades: losses.length,
       winRate: total > 0 ? (wins.length / total) * 100 : 0,
       profitFactor: totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? 99 : 1,
-      maxDrawdown: 0,
+      maxDrawdown: parseFloat(maxDd.toFixed(2)),
       totalPnL: balance - initialBalance,
     };
   },

@@ -153,15 +153,23 @@ export const ReplayBar: React.FC = () => {
   // ── SLICE SYNC WITH TIMEFRAME AGGREGATION & PRICE UPDATE ───
   useEffect(() => {
     if (!isActive || !baseCandles.length) return;
-    const sliced = baseCandles.slice(0, currentIndex + 1);
-    const aggregated = aggregateCandles(sliced, activeTF, baseTF);
-    setDisplayCandles(aggregated);
 
-    const currentC = baseCandles[currentIndex];
+    // Safety guard: ensure the chart always has sufficient historical context (never a single stretched candle)
+    let safeIdx = currentIndex;
+    if (safeIdx < 10 && baseCandles.length > 20) {
+      safeIdx = Math.min(25, baseCandles.length - 1);
+      setCurrentIndex(safeIdx);
+    }
+
+    const sliced = baseCandles.slice(0, safeIdx + 1);
+    const aggregated = aggregateCandles(sliced, activeTF, baseTF);
+    setDisplayCandles(aggregated.length > 0 ? aggregated : baseCandles);
+
+    const currentC = baseCandles[safeIdx];
     if (currentC) {
       updatePrice(currentC);
     }
-  }, [isActive, currentIndex, baseCandles, activeTF, baseTF, setDisplayCandles, updatePrice]);
+  }, [isActive, currentIndex, baseCandles, activeTF, baseTF, setDisplayCandles, updatePrice, setCurrentIndex]);
 
   // ── AUTO-SYNC RISK% & QTY BASED ON SL DISTANCE ───────────
   const currentCandle = baseCandles[currentIndex];

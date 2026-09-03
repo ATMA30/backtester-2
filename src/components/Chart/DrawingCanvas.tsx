@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { Copy, Trash2 } from 'lucide-react';
 import { useDrawingStore } from '../../store/useDrawingStore';
 import { useMarketStore } from '../../store/useMarketStore';
 import { useTradeStore } from '../../store/useTradeStore';
@@ -1242,30 +1243,70 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const p1 = toXY(d.pts[1].time, d.pts[1].price);
         if (p0.x !== null && p0.y !== null && p1.x !== null && p1.y !== null) {
           const levels = [
-            { lvl: 0, label: '0.0% (0.0)' },
-            { lvl: 0.236, label: '23.6%' },
-            { lvl: 0.382, label: '38.2%' },
-            { lvl: 0.5, label: '50.0%' },
-            { lvl: 0.618, label: '61.8% (Golden)' },
-            { lvl: 0.786, label: '78.6%' },
-            { lvl: 1.0, label: '100.0%' },
+            { lvl: 0, label: '0.0%', color: '#94A3B8', fill: 'rgba(148, 163, 184, 0.04)' },
+            { lvl: 0.236, label: '23.6%', color: '#F43F5E', fill: 'rgba(244, 63, 94, 0.05)' },
+            { lvl: 0.382, label: '38.2%', color: '#F59E0B', fill: 'rgba(245, 158, 11, 0.06)' },
+            { lvl: 0.5, label: '50.0%', color: '#10B981', fill: 'rgba(16, 185, 129, 0.07)' },
+            { lvl: 0.618, label: '61.8% (Golden)', color: '#EAB308', fill: 'rgba(234, 179, 8, 0.10)' },
+            { lvl: 0.786, label: '78.6%', color: '#8B5CF6', fill: 'rgba(139, 92, 246, 0.05)' },
+            { lvl: 1.0, label: '100.0%', color: '#3B82F6', fill: 'transparent' },
           ];
 
           const p0y = p0.y;
           const dy = p1.y - p0.y;
           const minX = Math.min(p0.x, p1.x) * dpr;
           const maxX = Math.max(p0.x, p1.x) * dpr;
+          const dec = currentSymbol.includes('JPY') || d.pts[0].price > 500 ? 2 : 5;
 
-          levels.forEach(({ lvl, label }) => {
+          // 1. Subtle dashed trend impulse anchor line
+          ctx.save();
+          ctx.setLineDash([4 * dpr, 4 * dpr]);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(p0.x * dpr, p0.y * dpr);
+          ctx.lineTo(p1.x * dpr, p1.y * dpr);
+          ctx.stroke();
+          ctx.restore();
+
+          // 2. Zone fills between Fibonacci levels
+          for (let i = 0; i < levels.length - 1; i++) {
+            const yA = (p0y + dy * levels[i].lvl) * dpr;
+            const yB = (p0y + dy * levels[i + 1].lvl) * dpr;
+            const topY = Math.min(yA, yB);
+            const height = Math.abs(yB - yA);
+            ctx.fillStyle = levels[i].fill;
+            ctx.fillRect(minX, topY, maxX - minX, height);
+          }
+
+          // 3. Horizontal levels and price badges
+          levels.forEach(({ lvl, label, color }) => {
             const ly = (p0y + dy * lvl) * dpr;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = (lvl === 0 || lvl === 1.0 || lvl === 0.618 ? 1.5 : 1) * dpr;
             ctx.beginPath();
             ctx.moveTo(minX, ly);
             ctx.lineTo(maxX, ly);
             ctx.stroke();
 
-            ctx.fillStyle = d.style.color || '#3B82F6';
-            ctx.font = `${9 * dpr}px JetBrains Mono, monospace`;
-            ctx.fillText(label, minX + 4 * dpr, ly - 3 * dpr);
+            // Calculate precise price level
+            const lvlPrice = d.pts[0].price + (d.pts[1].price - d.pts[0].price) * lvl;
+            const labelText = `${label} • ${lvlPrice.toFixed(dec)}`;
+
+            // Badge pill background
+            ctx.font = `600 ${8.5 * dpr}px 'JetBrains Mono', monospace`;
+            const textW = ctx.measureText(labelText).width;
+            const badgeW = textW + 8 * dpr;
+            const badgeH = 14 * dpr;
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+            ctx.fillRect(minX + 6 * dpr, ly - 14 * dpr, badgeW, badgeH);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 0.8 * dpr;
+            ctx.strokeRect(minX + 6 * dpr, ly - 14 * dpr, badgeW, badgeH);
+
+            ctx.fillStyle = color;
+            ctx.fillText(labelText, minX + 10 * dpr, ly - 3.5 * dpr);
           });
         }
       } else if (d.type === 'pos_long' || d.type === 'pos_short') {
@@ -2074,17 +2115,20 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
               selectDrawing(dup.id);
             }}
             style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#94A3B8',
+              background: 'rgba(255, 255, 255, 0.06)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              color: '#CBD5E1',
               cursor: 'pointer',
-              fontSize: '12px',
-              padding: '2px 4px',
-              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '4px 6px',
+              borderRadius: '5px',
+              transition: 'background 0.15s ease',
             }}
             title="Dupliquer"
           >
-            📋
+            <Copy size={13} strokeWidth={2} />
           </button>
 
           {/* Delete button */}
@@ -2094,18 +2138,20 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
               selectDrawing(null);
             }}
             style={{
-              background: 'rgba(244, 63, 94, 0.2)',
-              border: '1px solid rgba(244, 63, 94, 0.4)',
+              background: 'rgba(244, 63, 94, 0.18)',
+              border: '1px solid rgba(244, 63, 94, 0.35)',
               color: '#F43F5E',
               cursor: 'pointer',
-              fontSize: '11px',
-              fontWeight: 700,
-              padding: '2px 6px',
-              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '4px 6px',
+              borderRadius: '5px',
+              transition: 'background 0.15s ease',
             }}
             title="Supprimer (Touche Suppr)"
           >
-            ✕
+            <Trash2 size={13} strokeWidth={2} />
           </button>
         </div>
       )}

@@ -3,7 +3,6 @@ import { Search, Globe, X } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore, ALL_MARKET_PAIRS, detectBaseTF } from '../../store/useMarketStore';
 import { fetchHistoricalData } from '../../services/historicalApi';
-import { fetchDerivMultiYear } from '../../services/derivWs';
 import { MarketPair } from '../../types/market';
 
 export const LiveModal: React.FC = () => {
@@ -22,6 +21,9 @@ export const LiveModal: React.FC = () => {
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tous');
   const [isLoading, setIsLoading] = useState(false);
+  const [baseInterval, setBaseInterval] = useState<'1d' | '1h' | '15m' | '5m'>(() => {
+    return activeTF <= 300 ? '5m' : activeTF <= 900 ? '15m' : activeTF <= 3600 ? '1h' : '1d';
+  });
 
   if (activeModal !== 'live') return null;
 
@@ -35,12 +37,19 @@ export const LiveModal: React.FC = () => {
     'Crypto',
   ];
 
+  const intervalOptions = [
+    { value: '1d', label: '📅 1 Jour (27 Ans - Replay Macro / Swing)' },
+    { value: '1h', label: '⏱️ 1 Heure (10 000 barres / 2 Ans - Replay Intraday)' },
+    { value: '15m', label: '⚡ 15 Min (10 000 barres - Replay Day Trading)' },
+    { value: '5m', label: '🔬 5 Min (10 000 barres - Replay Scalping)' },
+  ];
+
   const rangeOptions = [
     { value: '1y', label: '1 An (~260 barres D1 / 6 000 H1)' },
     { value: '2y', label: '2 Ans (12 350 barres H1)' },
     { value: '5y', label: '5 Ans (Recommandé)' },
     { value: '10y', label: '10 Ans (2 600 barres D1)' },
-    { value: 'max', label: 'Historique Complet Max (27 Ans - 1999 → 2026)' },
+    { value: 'max', label: 'Historique Complet Max (Jusqu\'à 12 000 barres)' },
   ];
 
   const filteredPairs = ALL_MARKET_PAIRS.filter((p) => {
@@ -54,28 +63,20 @@ export const LiveModal: React.FC = () => {
 
   const handleSelectPair = async (pair: MarketPair) => {
     setIsLoading(true);
-    showToast(`Chargement de ${pair.symbol} (${historyRange})...`, 'info', 2500);
+    showToast(`Chargement de ${pair.symbol} en ${baseInterval.toUpperCase()} (${historyRange})...`, 'info', 3000);
 
     let candles: any = null;
 
-    // 1. Try with user's desired interval
     try {
-      const interval = activeTF <= 3600 ? '1h' : '1d';
-      candles = await fetchHistoricalData(pair.symbol, interval, historyRange);
-    } catch {}
+      candles = await fetchHistoricalData(pair.symbol, baseInterval, historyRange);
+    } catch (err) {
+      console.warn('Fetch error:', err);
+    }
 
-    // 2. If null, fallback to 1d daily data
+    // Fallback if intraday not available for that specific pair
     if (!candles || !candles.length) {
       try {
         candles = await fetchHistoricalData(pair.symbol, '1d', historyRange);
-      } catch {}
-    }
-
-    // 3. If still null and has derivSymbol, try Deriv WebSocket
-    if ((!candles || !candles.length) && pair.derivSymbol) {
-      try {
-        const gran = activeTF <= 60 ? 60 : activeTF <= 3600 ? 3600 : 86400;
-        candles = await fetchDerivMultiYear(pair.derivSymbol, gran, 10000);
       } catch {}
     }
 
@@ -86,11 +87,13 @@ export const LiveModal: React.FC = () => {
       setSymbol(pair.symbol);
       setBaseCandles(candles, detectedTF);
       setLiveConnected(true);
-      if (activeTF < detectedTF) {
-        setTimeframe(detectedTF);
-      }
+      setTimeframe(detectedTF);
       closeModal();
-      showToast(`${pair.symbol} : ${candles.length.toLocaleString()} bougies chargées (${historyRange})`, 'success', 3500);
+      showToast(
+        `🟢 ${pair.symbol} : ${candles.length.toLocaleString()} bougies chargées (${detectedTF <= 3600 ? detectedTF / 60 + ' min' : '1 jour'}) — Prêt pour le Replay !`,
+        'success',
+        4000
+      );
     } else {
       showToast(`Impossible de charger ${pair.symbol}. Réessayez avec une autre période.`, 'error', 3000);
     }
@@ -98,11 +101,11 @@ export const LiveModal: React.FC = () => {
 
   return (
     <div id="live-modal" className="custom-modal open" style={{ display: 'flex', opacity: 1 }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
-      <div className="custom-modal-box" style={{ maxWidth: '680px' }}>
+      <div className="custom-modal-box" style={{ maxWidth: '720px' }}>
         <div className="custom-modal-header">
           <div className="custom-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Globe size={16} strokeWidth={2} style={{ color: '#10B981' }} />
-            <span>Paires Forex &amp; Marchés en Direct (27 Ans d'historique)</span>
+            <span>Marchés en Direct &amp; Backtest Replay (Profondeur Maximale)</span>
           </div>
           <button className="custom-modal-close" onClick={closeModal} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <X size={15} strokeWidth={2.4} />
@@ -110,13 +113,13 @@ export const LiveModal: React.FC = () => {
         </div>
 
         <div className="custom-modal-body">
-          {/* Controls */}
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-            <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+          {/* Controls: Search + Base TF + Range */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
               <Search size={13} strokeWidth={2} style={{ position: 'absolute', left: '10px', color: 'var(--text-muted)', pointerEvents: 'none' }} />
               <input
                 type="text"
-                placeholder="Rechercher (ex: EURUSD, Gold, SPX500, BTC)..."
+                placeholder="Rechercher (EURUSD, Gold, SPX500, BTC)..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 style={{
@@ -124,22 +127,42 @@ export const LiveModal: React.FC = () => {
                   background: 'var(--bg-elevated)',
                   border: '1px solid var(--border)',
                   borderRadius: 'var(--radius-sm)',
-                  padding: '8px 12px 8px 30px',
+                  padding: '7px 10px 7px 30px',
                   color: 'var(--text-primary)',
-                  fontSize: '12px',
+                  fontSize: '11px',
                   outline: 'none',
                 }}
               />
             </div>
             <select
+              value={baseInterval}
+              onChange={(e) => setBaseInterval(e.target.value as any)}
+              title="Précision de base pour le Replay"
+              style={{
+                background: 'var(--bg-elevated)',
+                border: '1px solid rgba(59, 130, 246, 0.4)',
+                borderRadius: 'var(--radius-sm)',
+                color: '#60A5FA',
+                padding: '7px 8px',
+                fontSize: '11px',
+                fontWeight: 600,
+                outline: 'none',
+              }}
+            >
+              {intervalOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <select
               value={historyRange}
               onChange={(e) => setHistoryRange(e.target.value)}
+              title="Profondeur d'historique à télécharger"
               style={{
                 background: 'var(--bg-elevated)',
                 border: '1px solid var(--border)',
                 borderRadius: 'var(--radius-sm)',
                 color: 'var(--text-primary)',
-                padding: '8px 10px',
+                padding: '7px 8px',
                 fontSize: '11px',
                 outline: 'none',
               }}
@@ -148,6 +171,24 @@ export const LiveModal: React.FC = () => {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
+          </div>
+
+          {/* Replay Notice */}
+          <div
+            style={{
+              background: 'rgba(59, 130, 246, 0.08)',
+              border: '1px solid rgba(59, 130, 246, 0.22)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '6px 10px',
+              fontSize: '10.5px',
+              color: '#93C5FD',
+              marginBottom: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}
+          >
+            <span>💡 <b>Replay Idéal</b> : En choisissant <b>1 Heure</b> ou <b>15 Min</b>, vous pouvez démarrer le Replay barre par barre et basculer vers 1H, 4H et 1J sans recharger !</span>
           </div>
 
           {/* Categories */}

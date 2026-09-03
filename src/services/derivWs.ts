@@ -82,10 +82,11 @@ export function fetchDerivChunk(
 export async function fetchDerivMultiYear(
   derivSymbol: string,
   granularity: number,
-  targetCount: number = 10000
+  targetCount: number = 10000,
+  endEpoch?: number
 ): Promise<Candle[]> {
   let allCandles: Candle[] = [];
-  let oldestEpoch: string | number = 'latest';
+  let oldestEpoch: string | number = endEpoch ? Math.floor(endEpoch) : 'latest';
   const maxBatches = Math.min(15, Math.ceil(targetCount / 3000) + 1);
 
   for (let b = 1; b <= maxBatches; b++) {

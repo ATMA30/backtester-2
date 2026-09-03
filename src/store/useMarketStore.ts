@@ -77,8 +77,8 @@ export const ALL_MARKET_PAIRS: MarketPair[] = [
   // Commodities & Indices
   { symbol: 'XAUUSD', derivSymbol: 'frxXAUUSD', label: 'XAU / USD (Or / Gold Spot)', category: 'Métaux & Matières', decimals: 2, pip: 0.01 },
   { symbol: 'XAGUSD', derivSymbol: 'frxXAGUSD', label: 'XAG / USD (Argent / Silver Spot)', category: 'Métaux & Matières', decimals: 3, pip: 0.01 },
-  { symbol: 'SPX500', label: 'S&P 500 (US 500 Index)', category: 'Indices Mondiaux', decimals: 2, pip: 0.1 },
-  { symbol: 'NAS100', label: 'Nasdaq 100 (US Tech Index)', category: 'Indices Mondiaux', decimals: 2, pip: 0.1 },
+  { symbol: 'SPX500', derivSymbol: 'OTC_SPC', label: 'S&P 500 (US 500 Index)', category: 'Indices Mondiaux', decimals: 2, pip: 0.1 },
+  { symbol: 'NAS100', derivSymbol: 'OTC_NDX', label: 'Nasdaq 100 (US Tech Index)', category: 'Indices Mondiaux', decimals: 2, pip: 0.1 },
   { symbol: 'USOIL', label: 'Pétrole Brut WTI (Crude Oil)', category: 'Métaux & Matières', decimals: 2, pip: 0.01 },
   { symbol: 'UKOIL', label: 'Pétrole Brent (Brent Oil)', category: 'Métaux & Matières', decimals: 2, pip: 0.01 },
 
@@ -188,6 +188,8 @@ interface MarketState {
   activeIndicators: ActiveIndicator[];
   currentFitContentTrigger: number;
 
+  dailyMasterCandles: Candle[];
+  restoreDailyDataset: (targetTF?: number) => boolean;
   setSymbol: (symbol: string) => void;
   setTimeframe: (tfSec: number) => void;
   setBaseCandles: (candles: Candle[], baseTF?: number) => void;
@@ -212,6 +214,7 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   baseTF: 86400,
   baseCandles: [],
   displayCandles: [],
+  dailyMasterCandles: [],
   sortedTimes: [],
   isLiveConnected: false,
   historyRange: 'max',
@@ -259,27 +262,56 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   setBaseCandles: (baseCandles, customBaseTF) => {
     const baseTF = customBaseTF || detectBaseTF(baseCandles);
     const sortedTimes = baseCandles.map((c) => c.time);
-    set({
+    const state = get();
+
+    const updatePayload: any = {
       baseCandles,
       displayCandles: baseCandles,
       sortedTimes,
       baseTF,
       activeTF: baseTF,
-    });
+    };
 
-    useReplayStore.getState().resetReplay();
+    // Protect master daily dataset in memory if this is a rich daily dataset (>= 500 bars)
+    if (baseTF >= 86400 && baseCandles.length > 500) {
+      updatePayload.dailyMasterCandles = baseCandles;
+    }
 
-    const symbol = get().currentSymbol;
-    const { historyRange } = get();
-    saveDataset({
-      symbol,
-      name: symbol,
-      candlesCount: baseCandles.length,
-      baseTF,
-      createdAt: Date.now(),
-      timeRange: historyRange,
-      data: baseCandles,
-    });
+    set(updatePayload);
+
+    if (!useReplayStore.getState().isActive) {
+      useReplayStore.getState().resetReplay();
+    }
+
+    const symbol = state.currentSymbol;
+    const { historyRange } = state;
+    // Do not overwrite a full 7,000-candle dataset in IndexedDB with a small intraday slice
+    if (baseTF >= 86400 || baseCandles.length > 3000) {
+      saveDataset({
+        symbol,
+        name: symbol,
+        candlesCount: baseCandles.length,
+        baseTF,
+        createdAt: Date.now(),
+        timeRange: historyRange,
+        data: baseCandles,
+      });
+    }
+  },
+  restoreDailyDataset: (targetTF: number = 86400) => {
+    const { dailyMasterCandles } = get();
+    if (dailyMasterCandles && dailyMasterCandles.length > 500) {
+      const sortedTimes = dailyMasterCandles.map((c) => c.time);
+      set({
+        baseCandles: dailyMasterCandles,
+        displayCandles: aggregateCandles(dailyMasterCandles, targetTF, 86400),
+        sortedTimes,
+        baseTF: 86400,
+        activeTF: targetTF,
+      });
+      return true;
+    }
+    return false;
   },
   setDisplayCandles: (displayCandles) => {
     set({
