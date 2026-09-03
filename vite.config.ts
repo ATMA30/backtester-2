@@ -124,6 +124,34 @@ function marketDataPlugin(): Plugin {
             }
           }
 
+          // If Spot Gold or Silver, use Swiss Bank Dukascopy Spot (matches TradingView OANDA spot rates cent for cent!)
+          if (symbol === 'XAUUSD' || symbol === 'GOLD' || symbol === 'XAGUSD' || symbol === 'SILVER') {
+            try {
+              const inst = symbol.includes('XAG') || symbol.includes('SILVER') ? 'xagusd' : 'xauusd';
+              const tf = interval === '1d' ? 'd1' : interval === '1h' ? 'h1' : interval === '15m' ? 'm15' : interval === '5m' ? 'm5' : 'm1';
+              const toD = new Date().toISOString().slice(0, 10);
+              const fromD = interval === '1d' ? '2016-01-01' : '2024-01-01';
+              const rates = await getHistoricalRates({
+                instrument: inst,
+                dates: { from: fromD, to: toD },
+                timeframe: tf as any,
+                format: 'json',
+              });
+              if (Array.isArray(rates) && rates.length > 50) {
+                candles = rates.map((r: any) => ({
+                  time: Math.floor(r.timestamp / 1000),
+                  open: Number(r.open),
+                  high: Number(r.high),
+                  low: Number(r.low),
+                  close: Number(r.close),
+                  volume: Math.floor(Number(r.volume || 0)),
+                }));
+              }
+            } catch (err) {
+              console.warn('[Dukascopy Spot Metals Error]:', err);
+            }
+          }
+
           // Fallback to Yahoo Finance (exact server.py behavior)
           if (candles.length < 50) {
             candles = await fetchYahooBackend(symbol, rangeStr, interval);

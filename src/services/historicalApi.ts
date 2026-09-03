@@ -275,19 +275,14 @@ export async function fetchHistoricalData(
       }
     }
 
-    // 1. Gold & Precious Metals (Dukascopy Swiss Bank & Binance LBMA - NO DERIV!)
+    // 1. Gold & Precious Metals (Dukascopy Swiss Bank Spot - Matches TradingView OANDA!)
     if (sym.includes('XAU') || sym.includes('GOLD')) {
-      // Intraday: Dukascopy Swiss Bank real spot gold
-      if (interval !== '1d') {
-        const dukaGold = await fetchDukascopy('xauusd', interval, targetCount, targetTimestamp);
-        if (dukaGold && dukaGold.length > 0) return dukaGold;
-      }
-      // Daily: Binance PAXG (real LBMA physical gold 2020-2026)
+      const dukaGold = await fetchDukascopy('xauusd', interval, targetCount, targetTimestamp);
+      if (dukaGold && dukaGold.length > 50) return dukaGold;
+
+      // Fallback: Binance PAXG (LBMA physical gold)
       const paxgCandles = await fetchBinanceCrypto('PAXGUSDT', interval, targetCount, targetTimestamp);
       if (paxgCandles && paxgCandles.length > 50) return cleanCandles(paxgCandles, sym);
-      // Dukascopy Daily fallback
-      const dukaDaily = await fetchDukascopy('xauusd', '1d', targetCount, targetTimestamp);
-      if (dukaDaily && dukaDaily.length > 0) return dukaDaily;
     }
 
     if (sym.includes('XAG') || sym.includes('SILVER')) {
