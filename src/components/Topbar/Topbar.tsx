@@ -439,16 +439,54 @@ export const Topbar: React.FC = () => {
                       key={t.s}
                       className={`tv-dropdown-item ${t.s === activeTF ? 'active' : ''}`}
                       onClick={async () => {
+                        // 0. PREVENTATIVE REPLAY ARCHIVE GUARD:
+                        // In 1m, archives only go back 7 days. In 5m-30m, 60 days. In 1h, 2 years.
+                        // Prevent jumping to today or breaking the replay!
+                        const replayState = useReplayStore.getState();
+                        const prevCutTime = replayState.isActive && baseCandles[replayState.currentIndex]?.time
+                          ? baseCandles[replayState.currentIndex].time
+                          : null;
+
+                        if (prevCutTime) {
+                          const nowSec = Math.floor(Date.now() / 1000);
+                          const ageDays = Math.floor((nowSec - prevCutTime) / 86400);
+
+                          if (t.s <= 60 && ageDays > 7) {
+                            closeAllDropdowns();
+                            showToast(
+                              `⚠️ Limite d'archive 1m : les données 1 minute ne remontent qu'aux 7 derniers jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Impossible de descendre en 1m à cette date. Pour rejouer cette date, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
+                              'warning',
+                              6000
+                            );
+                            return;
+                          }
+
+                          if (t.s > 60 && t.s <= 1800 && ageDays > 60) {
+                            closeAllDropdowns();
+                            showToast(
+                              `⚠️ Limite d'archive ${t.label} : les flux intrajournaliers (${t.label}) ne remontent qu'à 60 jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer cette date, utilisez le 1H (2 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
+                              'warning',
+                              6000
+                            );
+                            return;
+                          }
+
+                          if (t.s > 1800 && t.s <= 3600 && ageDays > 730) {
+                            closeAllDropdowns();
+                            showToast(
+                              `⚠️ Limite d'archive 1h : les flux horaires ne remontent qu'à 2 ans (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer des dates antérieures, utilisez le timeframe 1D (27 ans d'historique). Le Replay reste en place.`,
+                              'warning',
+                              6000
+                            );
+                            return;
+                          }
+                        }
+
                         if (isAvailable) {
                           // Special guard: If returning to Daily/Weekly/Monthly (>= 86400) from an intraday dataset (< 86400),
                           // restore the full 27-year Master Daily dataset so D1 data never shrinks!
                           if (t.s >= 86400 && baseTF < 86400) {
                             closeAllDropdowns();
-                            const replayState = useReplayStore.getState();
-                            const prevCutTime = replayState.isActive && baseCandles[replayState.currentIndex]?.time
-                              ? baseCandles[replayState.currentIndex].time
-                              : null;
-
                             const { restoreDailyDataset } = useMarketStore.getState();
                             const restored = restoreDailyDataset(t.s);
                             if (restored) {
@@ -511,16 +549,11 @@ export const Topbar: React.FC = () => {
                           t.s <= 3600 ? '1h' :
                           t.s <= 14400 ? '4h' : '1d';
 
-                        const replayState = useReplayStore.getState();
-                        const prevCutTime = replayState.isActive && baseCandles[replayState.currentIndex]?.time
-                          ? baseCandles[replayState.currentIndex].time
-                          : null;
-
                         closeAllDropdowns();
                         showToast(
                           prevCutTime
                             ? `Recherche ${t.label} au moment précis du Replay (${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')})...`
-                            : `Téléchargement de ${currentSymbol} en ${t.label} (10 000 barres)...`,
+                            : `Téléchargement de ${currentSymbol} en ${t.label}...`,
                           'info',
                           3000
                         );
@@ -608,23 +641,23 @@ export const Topbar: React.FC = () => {
                       }}
                     >
                       <span style={{ fontWeight: isAvailable ? 600 : 400 }}>{t.label}</span>
-                      {!isAvailable && (
-                        <span
-                          style={{
-                            fontSize: '9px',
-                            color: '#60A5FA',
-                            background: 'rgba(59, 130, 246, 0.15)',
-                            border: '1px solid rgba(59, 130, 246, 0.3)',
-                            borderRadius: '3px',
-                            padding: '1px 5px',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.4px',
-                            fontWeight: 600,
-                          }}
-                        >
-                          ⬇ Télécharger (~7 mois)
-                        </span>
-                      )}
+                      <span
+                        style={{
+                          fontSize: '9px',
+                          color: isAvailable ? '#9CA3AF' : '#60A5FA',
+                          background: isAvailable ? 'transparent' : 'rgba(59, 130, 246, 0.15)',
+                          border: isAvailable ? 'none' : '1px solid rgba(59, 130, 246, 0.3)',
+                          borderRadius: '3px',
+                          padding: '1px 5px',
+                          fontWeight: 500,
+                        }}
+                      >
+                        {t.s <= 60 ? 'Archive 7j' :
+                         t.s <= 1800 ? 'Archive 60j' :
+                         t.s <= 3600 ? 'Archive 2 ans' :
+                         t.s <= 14400 ? 'Archive 5 ans' :
+                         '27 ans (BCE)'}
+                      </span>
                     </div>
                   );
                 })}

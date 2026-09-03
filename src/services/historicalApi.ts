@@ -260,6 +260,21 @@ export async function fetchHistoricalData(
     interval === '4h' ? 14400 : 86400;
 
   try {
+    // 0. Primary Institutional API (/api/history equivalent to python server)
+    if (!sym.startsWith('R_') && !sym.startsWith('1HZ') && !sym.startsWith('BOOM') && !sym.startsWith('CRASH') && !sym.startsWith('STEP') && !sym.startsWith('JUMP')) {
+      try {
+        const apiRes = await fetch(`/api/history?symbol=${encodeURIComponent(sym)}&interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}`);
+        if (apiRes.ok) {
+          const json = await apiRes.json();
+          if (json && Array.isArray(json.candles) && json.candles.length > 50) {
+            return cleanCandles(json.candles, sym);
+          }
+        }
+      } catch (err) {
+        console.warn('[History API local dev fallback]:', err);
+      }
+    }
+
     // 1. Gold & Precious Metals (Dukascopy Swiss Bank & Binance LBMA - NO DERIV!)
     if (sym.includes('XAU') || sym.includes('GOLD')) {
       // Intraday: Dukascopy Swiss Bank real spot gold

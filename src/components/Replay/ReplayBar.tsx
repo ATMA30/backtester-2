@@ -273,13 +273,21 @@ export const ReplayBar: React.FC = () => {
     if (!baseCandles.length) return;
     const minD = new Date(baseCandles[0].time * 1000).toISOString().slice(0, 10);
     const maxD = new Date(baseCandles[baseCandles.length - 1].time * 1000).toISOString().slice(0, 10);
-    const userInput = prompt(`Date de départ (${minD} → ${maxD}) — format AAAA-MM-JJ :`, minD);
+    const tfNotice = activeTF <= 60 ? ' (1m : archive 7 jours max)' : activeTF <= 1800 ? ' (intraday : archive 60 jours max)' : '';
+    const userInput = prompt(`Date de départ${tfNotice} [${minD} → ${maxD}] — format AAAA-MM-JJ :`, minD);
     if (!userInput) return;
     const target = new Date(userInput).getTime() / 1000;
+
+    if (target < baseCandles[0].time) {
+      showToast(`⚠️ En ${activeTF <= 60 ? '1m' : 'intraday'}, les données ne remontent pas avant le ${minD}. Pour rejouer des dates plus anciennes, passez en 1H (2 ans) ou 1D (27 ans).`, 'warning', 6000);
+      return;
+    }
+
     const idx = baseCandles.findIndex((c) => c.time >= target);
     if (idx !== -1) {
-      setStartIndex(idx);
-      setCurrentIndex(idx);
+      const safeIdx = Math.max(20, idx);
+      setStartIndex(safeIdx);
+      setCurrentIndex(safeIdx);
       setIsPlaying(false);
       setShowAnchorMenu(false);
       showToast(`Replay ancré au ${userInput}`, 'success');
