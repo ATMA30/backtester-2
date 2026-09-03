@@ -168,24 +168,79 @@ async function fetchBinanceCrypto(
   return cleanCandles(rawCandles, symbol);
 }
 
-// ── 3. SYNTHETICS VIA DERIV WEBSOCKET (Multi-Year Pagination) ──
+// ── 3. DUKASCOPY SWISS BANK (Real Institutional FX, Metals & Indices) ──
+async function fetchDukascopy(
+  symbol: string,
+  interval: string,
+  targetCount: number = 3000,
+  targetTimestamp?: number
+): Promise<Candle[]> {
+  const sym = symbol.toUpperCase();
+  let dukaInstrument = sym.toLowerCase();
+  if (sym === 'SPX500') dukaInstrument = 'usa500idxusd';
+  else if (sym === 'NAS100') dukaInstrument = 'usatechidxusd';
+  else if (sym === 'GOLD' || sym === 'XAUUSD') dukaInstrument = 'xauusd';
+  else if (sym === 'SILVER' || sym === 'XAGUSD') dukaInstrument = 'xagusd';
+
+  const dukaTF =
+    interval === '1m' ? 'm1' :
+    interval === '5m' ? 'm5' :
+    interval === '15m' ? 'm15' :
+    interval === '30m' ? 'm30' :
+    interval === '1h' || interval === '4h' ? 'h1' : 'd1';
+
+  const granSec =
+    interval === '1m' ? 60 :
+    interval === '5m' ? 300 :
+    interval === '15m' ? 900 :
+    interval === '30m' ? 1800 :
+    interval === '1h' ? 3600 :
+    interval === '4h' ? 14400 : 86400;
+
+  const targetEpoch = targetTimestamp || Math.floor(Date.now() / 1000);
+  const fromEpoch = Math.max(0, targetEpoch - Math.floor(targetCount * 0.7) * granSec);
+  const toEpoch = Math.min(Math.floor(Date.now() / 1000), targetEpoch + Math.floor(targetCount * 0.3) * granSec);
+
+  const fromStr = new Date(fromEpoch * 1000).toISOString().slice(0, 10);
+  const toStr = new Date(toEpoch * 1000).toISOString().slice(0, 10);
+
+  const url = `/api/dukascopy?symbol=${encodeURIComponent(dukaInstrument)}&timeframe=${dukaTF}&from=${fromStr}&to=${toStr}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const rawData = await res.json();
+    if (!Array.isArray(rawData) || rawData.length === 0) return [];
+
+    const rawCandles: Candle[] = rawData.map((d: any) => ({
+      time: Math.floor(d.timestamp / 1000),
+      open: Number(d.open),
+      high: Number(d.high),
+      low: Number(d.low),
+      close: Number(d.close),
+      volume: Math.floor(Number(d.volume || 0)),
+    }));
+
+    return cleanCandles(rawCandles, symbol);
+  } catch (err) {
+    console.warn(`[Dukascopy Fetch Error for ${symbol}]:`, err);
+    return [];
+  }
+}
+
+// ── 4. SYNTHETICS VIA DERIV WEBSOCKET (Proprietary Volatility Indices Only) ──
 async function fetchDerivSynthetics(
   symbol: string,
   granularity: number = 86400,
   targetCount: number = 10000,
   targetTimestamp?: number
 ): Promise<Candle[]> {
-  let derivSym = symbol;
-  if (!derivSym.startsWith('R_') && !derivSym.startsWith('1HZ') && !derivSym.startsWith('BOOM') && !derivSym.startsWith('CRASH')) {
-    derivSym = `frx${symbol}`;
-  }
   const endEpoch = targetTimestamp
     ? Math.min(Math.floor(Date.now() / 1000), targetTimestamp + Math.floor(targetCount * 0.3) * granularity)
     : undefined;
-  return fetchDerivMultiYear(derivSym, granularity, targetCount, endEpoch);
+  return fetchDerivMultiYear(symbol, granularity, targetCount, endEpoch);
 }
 
-// ── MAIN DISPATCHER (100% PURE TYPESCRIPT - MAXIMUM DEPTH) ────
+// ── MAIN DISPATCHER (100% REAL INSTITUTIONAL FINANCIAL DATA) ────
 export async function fetchHistoricalData(
   symbol: string,
   interval: string = '1d',
@@ -204,95 +259,67 @@ export async function fetchHistoricalData(
     interval === '2h' ? 7200 :
     interval === '4h' ? 14400 : 86400;
 
-  const targetEndEpoch = targetTimestamp
-    ? Math.min(Math.floor(Date.now() / 1000), targetTimestamp + Math.floor(targetCount * 0.3) * gran)
-    : undefined;
-
   try {
-    // 1. Gold & Precious Metals (Full history)
+    // 1. Gold & Precious Metals (Dukascopy Swiss Bank & Binance LBMA - NO DERIV!)
     if (sym.includes('XAU') || sym.includes('GOLD')) {
-      // For Intraday (1m, 5m, 15m, 30m, 1h, 4h): Prioritize Deriv frxXAUUSD (institutional continuous spot gold, no flat illiquid stairs)
+      // Intraday: Dukascopy Swiss Bank real spot gold
       if (interval !== '1d') {
-        try {
-          const derivCandles = await fetchDerivMultiYear('frxXAUUSD', gran, targetCount, targetEndEpoch);
-          if (derivCandles && derivCandles.length > 0) return cleanCandles(derivCandles, sym);
-        } catch (err) {
-          console.warn('Deriv frxXAUUSD intraday fetch error:', err);
-        }
+        const dukaGold = await fetchDukascopy('xauusd', interval, targetCount, targetTimestamp);
+        if (dukaGold && dukaGold.length > 0) return dukaGold;
       }
-
-      // For Daily (1d): Try Binance PAXG (provides up to 2,500+ authentic LBMA daily physical gold candles)
-      try {
-        const paxgCandles = await fetchBinanceCrypto('PAXGUSDT', interval, targetCount, targetTimestamp);
-        if (paxgCandles && paxgCandles.length > 50) return cleanCandles(paxgCandles, sym);
-      } catch (err) {
-        console.warn('Binance PAXG fetch fallback:', err);
-      }
-
-      // Deriv frxXAUUSD fallback
-      try {
-        const derivCandles = await fetchDerivMultiYear('frxXAUUSD', gran, targetCount, targetEndEpoch);
-        if (derivCandles && derivCandles.length > 0) return cleanCandles(derivCandles, sym);
-      } catch (err) {
-        console.warn('Deriv frxXAUUSD fetch fallback:', err);
-      }
+      // Daily: Binance PAXG (real LBMA physical gold 2020-2026)
+      const paxgCandles = await fetchBinanceCrypto('PAXGUSDT', interval, targetCount, targetTimestamp);
+      if (paxgCandles && paxgCandles.length > 50) return cleanCandles(paxgCandles, sym);
+      // Dukascopy Daily fallback
+      const dukaDaily = await fetchDukascopy('xauusd', '1d', targetCount, targetTimestamp);
+      if (dukaDaily && dukaDaily.length > 0) return dukaDaily;
     }
 
     if (sym.includes('XAG') || sym.includes('SILVER')) {
-      try {
-        const derivCandles = await fetchDerivMultiYear('frxXAGUSD', gran, targetCount, targetEndEpoch);
-        if (derivCandles && derivCandles.length > 0) return cleanCandles(derivCandles, sym);
-      } catch (err) {
-        console.warn('Deriv frxXAGUSD fetch fallback:', err);
-      }
+      const dukaSilver = await fetchDukascopy('xagusd', interval, targetCount, targetTimestamp);
+      if (dukaSilver && dukaSilver.length > 0) return dukaSilver;
     }
 
-    // 2. Global Indices (S&P 500 & Nasdaq)
+    // 2. Global Indices (Dukascopy Swiss Bank: S&P 500 & Nasdaq - NO DERIV!)
     if (sym === 'SPX500') {
-      try {
-        const candles = await fetchDerivMultiYear('OTC_SPC', gran, targetCount, targetEndEpoch);
-        if (candles && candles.length > 0) return cleanCandles(candles, sym);
-      } catch (err) {
-        console.warn('Deriv OTC_SPC fetch fallback:', err);
-      }
+      const dukaSPX = await fetchDukascopy('usa500idxusd', interval, targetCount, targetTimestamp);
+      if (dukaSPX && dukaSPX.length > 0) return dukaSPX;
     }
     if (sym === 'NAS100') {
-      try {
-        const candles = await fetchDerivMultiYear('OTC_NDX', gran, targetCount, targetEndEpoch);
-        if (candles && candles.length > 0) return cleanCandles(candles, sym);
-      } catch (err) {
-        console.warn('Deriv OTC_NDX fetch fallback:', err);
-      }
+      const dukaNDX = await fetchDukascopy('usatechidxusd', interval, targetCount, targetTimestamp);
+      if (dukaNDX && dukaNDX.length > 0) return dukaNDX;
     }
 
-    // 3. Crypto via Binance Public API (Multi-year pagination up to 12,000 bars)
+    // 3. Crypto via Binance Public API (100% Real Order Books & Trades)
     if (sym.includes('BTC') || sym.includes('ETH') || sym.includes('SOL') || sym.includes('BNB') || sym.includes('DOGE') || sym.includes('XRP') || sym.includes('ADA') || sym.endsWith('USDT')) {
       const cryptoCandles = await fetchBinanceCrypto(sym, interval, targetCount, targetTimestamp);
       if (cryptoCandles.length > 0) return cryptoCandles;
     }
 
-    // 4. Synthetics (Deriv Volatility, Boom, Crash, Jump, Step)
+    // 4. Synthetics (Deriv proprietary math indices ONLY)
     if (sym.startsWith('R_') || sym.startsWith('1HZ') || sym.startsWith('BOOM') || sym.startsWith('CRASH') || sym.startsWith('STEP') || sym.startsWith('JUMP')) {
       const synthCandles = await fetchDerivSynthetics(sym, gran, targetCount, targetTimestamp);
       if (synthCandles.length > 0) return synthCandles;
     }
 
-    // 5. Forex (Frankfurter BCE 1999-2026: 7,000+ daily bars, with Deriv WS fallback)
+    // 5. Forex (BCE Official 1999-2026 for Daily + Dukascopy Swiss Bank for Intraday - NO DERIV!)
     if (sym.length === 6 && !sym.includes('XAU') && !sym.includes('XAG')) {
+      // Macro Daily/Weekly/Monthly: 100% European Central Bank (BCE)
       if (interval === '1d' && !targetTimestamp) {
         try {
           const forexCandles = await fetchFrankfurterForex(sym);
           if (forexCandles.length > 0) return forexCandles;
         } catch (err) {
-          console.warn(`Frankfurter BCE error for ${sym}, falling back to Deriv:`, err);
+          console.warn(`Frankfurter BCE error for ${sym}:`, err);
         }
       }
-      try {
-        const derivForex = await fetchDerivMultiYear(`frx${sym}`, gran, targetCount, targetEndEpoch);
-        if (derivForex.length > 0) return cleanCandles(derivForex, sym);
-      } catch (err) {
-        console.warn(`Deriv frx${sym} fetch error:`, err);
-      }
+      // Intraday & Replay: 100% Dukascopy Swiss Bank ECN FX
+      const dukaForex = await fetchDukascopy(sym, interval, targetCount, targetTimestamp);
+      if (dukaForex && dukaForex.length > 0) return dukaForex;
+
+      // Fallback to Frankfurter if intraday failed
+      const forexCandles = await fetchFrankfurterForex(sym);
+      if (forexCandles.length > 0) return forexCandles;
     }
   } catch (e) {
     console.warn(`[Historical API TS] Online fetch fallback for ${sym}:`, e);

@@ -15,6 +15,7 @@
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "dexie": "^4.0.11",
+    "dukascopy-node": "^1.50.0",
     "lightweight-charts": "^4.2.2",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",
