@@ -103,6 +103,116 @@ export const ImportModal: React.FC = () => {
 
   if (activeModal !== 'import') return null;
 
+  const handleFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
+    if (files.length === 1) {
+      handleFile(files[0]);
+      return;
+    }
+
+    const firstFile = files[0];
+    const suggestedSymbol = firstFile.name.replace(/\.[^/.]+$/, '').replace(/_FULL|_H1|_D1|_M15|_M5|_M1/gi, '').toUpperCase().slice(0, 16);
+    const sym = symbolInput || suggestedSymbol;
+    setFileName(`${files.length} fichiers : ${files.map((f) => f.name).slice(0, 2).join(', ')}...`);
+    if (!symbolInput) setSymbolInput(sym);
+
+    showToast(`Analyse et fusion de ${files.length} fichiers en cours...`, 'info', 3000);
+
+    const allCandles: Candle[] = [];
+
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        if (file.name.endsWith('.json')) {
+          let parsed = JSON.parse(text);
+          if (!Array.isArray(parsed) && typeof parsed === 'object') {
+            parsed = parsed.candles || parsed.data || parsed[Object.keys(parsed)[0]];
+          }
+          if (Array.isArray(parsed)) {
+            for (const p of parsed) {
+              const t = parseTimestamp(p.time || p.date || p.timestamp);
+              const o = parseNumber(p.open || p.o);
+              const h = parseNumber(p.high || p.h);
+              const l = parseNumber(p.low || p.l);
+              const c = parseNumber(p.close || p.c);
+              const v = parseNumber(p.volume || p.vol || p.v) || 100;
+              if (t && t > 0 && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
+                allCandles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+              }
+            }
+          }
+        } else {
+          // CSV Parsing
+          const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+          if (lines.length > 1) {
+            const counts: Record<string, number> = { ',': 0, ';': 0, '\t': 0, '|': 0 };
+            const headerLine = lines[0];
+            Object.keys(counts).forEach((sep) => {
+              counts[sep] = headerLine.split(sep).length - 1;
+            });
+            const bestSep = Object.keys(counts).reduce((a, b) => (counts[a] > counts[b] ? a : b));
+            const header = headerLine.split(bestSep).map((h) => h.trim().replace(/^["']|["']$/g, ''));
+            const dateCol = header.find((h) => autoMatchColumn(h, 'date')) || header[0];
+            const timeCol = header.find((h) => h !== dateCol && autoMatchColumn(h, 'time'));
+            const openCol = header.find((h) => autoMatchColumn(h, 'open')) || header[1];
+            const highCol = header.find((h) => autoMatchColumn(h, 'high')) || header[2];
+            const lowCol = header.find((h) => autoMatchColumn(h, 'low')) || header[3];
+            const closeCol = header.find((h) => autoMatchColumn(h, 'close')) || header[4];
+            const volCol = header.find((h) => autoMatchColumn(h, 'volume'));
+
+            const dIdx = header.indexOf(dateCol);
+            const tIdx = timeCol ? header.indexOf(timeCol) : -1;
+            const oIdx = header.indexOf(openCol);
+            const hIdx = header.indexOf(highCol);
+            const lIdx = header.indexOf(lowCol);
+            const cIdx = header.indexOf(closeCol);
+            const vIdx = volCol ? header.indexOf(volCol) : -1;
+
+            for (let i = 1; i < lines.length; i++) {
+              const r = lines[i].split(bestSep).map((v) => v.trim().replace(/^["']|["']$/g, ''));
+              let tStr = r[dIdx];
+              if (tIdx !== -1 && r[tIdx]) tStr = `${tStr} ${r[tIdx]}`;
+              const t = parseTimestamp(tStr);
+              const o = parseNumber(r[oIdx]);
+              const h = parseNumber(r[hIdx]);
+              const l = parseNumber(r[lIdx]);
+              const c = parseNumber(r[cIdx]);
+              const v = vIdx !== -1 ? parseNumber(r[vIdx]) || 100 : 100;
+              if (t && t > 0 && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
+                allCandles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Erreur lecture multi-fichiers:', file.name, err);
+      }
+    }
+
+    if (allCandles.length > 0) {
+      allCandles.sort((a, b) => a.time - b.time);
+      const deduplicated: Candle[] = [];
+      for (const c of allCandles) {
+        if (deduplicated.length > 0 && deduplicated[deduplicated.length - 1].time === c.time) {
+          deduplicated[deduplicated.length - 1] = c;
+        } else {
+          deduplicated.push(c);
+        }
+      }
+      const btf = detectBaseTF(deduplicated);
+      useReplayStore.getState().resetReplay();
+      setSymbol(sym);
+      setBaseCandles(deduplicated, btf, true);
+      setTimeframe(btf);
+      triggerFitContent();
+      closeModal();
+      showToast(`🟢 ${sym} : ${files.length} fichiers fusionnés (${deduplicated.length.toLocaleString()} bougies totales) !`, 'success', 4500);
+      return;
+    } else {
+      showToast('Impossible de lire les données des fichiers sélectionnés', 'error', 4500);
+    }
+  };
+
   const handleFile = (file: File) => {
     setFileName(file.name);
     const suggestedSymbol = file.name.replace(/\.[^/.]+$/, '').replace(/_FULL|_H1|_D1|_M15|_M5|_M1/gi, '').toUpperCase().slice(0, 16);
@@ -139,7 +249,7 @@ export const ImportModal: React.FC = () => {
               const btf = detectBaseTF(validCandles);
               useReplayStore.getState().resetReplay();
               setSymbol(sym);
-              setBaseCandles(validCandles, btf);
+              setBaseCandles(validCandles, btf, true);
               setTimeframe(btf);
               triggerFitContent();
               closeModal();
@@ -250,7 +360,7 @@ export const ImportModal: React.FC = () => {
       const btf = detectBaseTF(candles);
       useReplayStore.getState().resetReplay();
       setSymbol(sym);
-      setBaseCandles(candles, btf);
+      setBaseCandles(candles, btf, true);
       setTimeframe(btf);
       triggerFitContent();
       closeModal();
@@ -289,7 +399,8 @@ export const ImportModal: React.FC = () => {
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            if (e.dataTransfer.files?.[0]) handleFile(e.dataTransfer.files[0]);
+            const files = Array.from(e.dataTransfer.files || []);
+            if (files.length > 0) handleFiles(files);
           }}
           style={{ cursor: 'pointer' }}
         >
@@ -297,10 +408,11 @@ export const ImportModal: React.FC = () => {
             <FileSpreadsheet size={32} strokeWidth={1.5} style={{ color: '#38BDF8' }} />
           </div>
           <div className="drop-text" id="drop-filename">{fileName}</div>
-          <div className="drop-hint">ou cliquez pour parcourir vos fichiers</div>
+          <div className="drop-hint">ou cliquez pour sélectionner un ou plusieurs fichiers</div>
           <div className="drop-formats">
             <span className="fmt-badge">CSV</span>
             <span className="fmt-badge">JSON</span>
+            <span className="fmt-badge" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38BDF8', borderColor: 'rgba(56, 189, 248, 0.3)' }}>Multi-fichiers</span>
           </div>
         </div>
 
@@ -309,9 +421,11 @@ export const ImportModal: React.FC = () => {
           id="file-hidden"
           ref={fileInputRef}
           accept=".csv,.json,.txt"
+          multiple
           style={{ display: 'none' }}
           onChange={(e) => {
-            if (e.target.files?.[0]) handleFile(e.target.files[0]);
+            const files = Array.from(e.target.files || []);
+            if (files.length > 0) handleFiles(files);
           }}
         />
 

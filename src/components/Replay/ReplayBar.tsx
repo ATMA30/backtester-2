@@ -137,6 +137,7 @@ export const ReplayBar: React.FC = () => {
     const interval = setInterval(() => {
       if (currentIndex >= baseCandles.length - 1) {
         setIsPlaying(false);
+        showToast('🏁 Fin du Replay atteinte. Cliquez sur "Quitter" pour restaurer la totalité des bougies.', 'info', 4000);
         return;
       }
       const nextIdx = currentIndex + 1;
@@ -148,7 +149,7 @@ export const ReplayBar: React.FC = () => {
       }
     }, speedMs);
     return () => clearInterval(interval);
-  }, [isActive, isPlaying, currentIndex, speedMs, baseCandles, setCurrentIndex, setIsPlaying, updatePrice]);
+  }, [isActive, isPlaying, currentIndex, speedMs, baseCandles, setCurrentIndex, setIsPlaying, updatePrice, showToast]);
 
   // ── SLICE SYNC WITH TIMEFRAME AGGREGATION & PRICE UPDATE ───
   useEffect(() => {

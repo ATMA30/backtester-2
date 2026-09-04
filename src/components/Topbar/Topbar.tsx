@@ -48,6 +48,7 @@ export const Topbar: React.FC = () => {
     forexSessions,
     activeIndicators,
     displayCandles,
+    isImported,
     setTimeframe,
     setBaseCandles,
     setChartType,
@@ -529,10 +530,12 @@ export const Topbar: React.FC = () => {
                           }
                         }
 
+                        const isMarketPair = ALL_MARKET_PAIRS.some((p) => p.symbol === currentSymbol);
+                        const currentBaseDef = TIMEFRAME_DEFS.find((d) => d.s === baseTF) || { label: '1D' };
+
                         if (isAvailable) {
-                          // Special guard: If returning to Daily/Weekly/Monthly (>= 86400) from an intraday dataset (< 86400),
-                          // restore the full 27-year Master Daily dataset so D1 data never shrinks!
-                          if (t.s >= 86400 && baseTF < 86400) {
+                          // Special guard: ONLY for online market pairs when switching from an intraday web stream back to 27y BCE master daily
+                          if (!isImported && isMarketPair && t.s >= 86400 && baseTF < 86400) {
                             closeAllDropdowns();
                             const { restoreDailyDataset } = useMarketStore.getState();
                             const restored = restoreDailyDataset(t.s);
@@ -552,7 +555,7 @@ export const Topbar: React.FC = () => {
                             try {
                               const dailyCandles = await fetchHistoricalData(currentSymbol, '1d', 'max');
                               if (dailyCandles && dailyCandles.length > 500) {
-                                setBaseCandles(dailyCandles, 86400);
+                                setBaseCandles(dailyCandles, 86400, false);
                                 setTimeframe(t.s);
                                 if (prevCutTime) {
                                   const newIdx = dailyCandles.findIndex((c) => c.time >= prevCutTime);
@@ -567,15 +570,17 @@ export const Topbar: React.FC = () => {
                             return;
                           }
 
+                          // For imported files or upward aggregation: NEVER overwrite baseCandles!
+                          // baseCandles remains the pristine original resolution (e.g. H1), and displayCandles aggregates cleanly!
                           setTimeframe(t.s);
                           closeAllDropdowns();
-                          showToast(`Timeframe : ${t.label}`, 'info', 1500);
+                          if (replayState.isActive) {
+                            showToast(`Timeframe : ${t.label} (Replay actif — Cliquez sur "Quitter" pour voir toutes les bougies)`, 'info', 3000);
+                          } else {
+                            showToast(`Timeframe : ${t.label}`, 'info', 1500);
+                          }
                           return;
                         }
-
-                        // 1. Check if dataset is an imported file or custom offline dataset
-                        const isMarketPair = ALL_MARKET_PAIRS.some((p) => p.symbol === currentSymbol);
-                        const currentBaseDef = TIMEFRAME_DEFS.find((d) => d.s === baseTF) || { label: '1D' };
 
                         if (!isMarketPair) {
                           closeAllDropdowns();

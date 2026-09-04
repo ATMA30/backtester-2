@@ -188,13 +188,15 @@ interface MarketState {
   forexSessions: ForexSessionConfig;
   activeIndicators: ActiveIndicator[];
   currentFitContentTrigger: number;
+  isImported: boolean;
+  setIsImported: (isImported: boolean) => void;
 
   dailyMasterCandles: Candle[];
   dailyMasterMap: Record<string, Candle[]>;
   restoreDailyDataset: (targetTF?: number) => boolean;
   setSymbol: (symbol: string) => void;
   setTimeframe: (tfSec: number) => void;
-  setBaseCandles: (candles: Candle[], baseTF?: number) => void;
+  setBaseCandles: (candles: Candle[], baseTF?: number, isImported?: boolean) => void;
   setDisplayCandles: (candles: Candle[]) => void;
   setLiveConnected: (connected: boolean) => void;
   setHistoryRange: (range: string) => void;
@@ -220,6 +222,8 @@ export const useMarketStore = create<MarketState>((set, get) => ({
   dailyMasterMap: {},
   sortedTimes: [],
   isLiveConnected: false,
+  isImported: false,
+  setIsImported: (isImported) => set({ isImported }),
   historyRange: 'max',
   chartType: 'Candlestick',
   showVolume: true,
@@ -269,7 +273,7 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       sortedTimes: aggregated.map((c) => c.time),
     });
   },
-  setBaseCandles: (rawCandles, customBaseTF) => {
+  setBaseCandles: (rawCandles, customBaseTF, isImported) => {
     if (!Array.isArray(rawCandles) || rawCandles.length === 0) return;
 
     // 1. Strict sanitization: ensure clean numbers, normalize seconds, sort & deduplicate
@@ -312,6 +316,9 @@ export const useMarketStore = create<MarketState>((set, get) => ({
       baseTF,
       activeTF: baseTF,
     };
+    if (isImported !== undefined) {
+      updatePayload.isImported = isImported;
+    }
 
     // Protect master daily dataset in memory scoped strictly by symbol
     const currentMap = state.dailyMasterMap || {};
