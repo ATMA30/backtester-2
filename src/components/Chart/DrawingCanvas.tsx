@@ -1,49 +1,50 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { Copy, Trash2 } from 'lucide-react';
+import { blockTradingInThePast, currentTradingCandle } from '../Replay/replayGuards';
 import { useDrawingStore } from '../../store/useDrawingStore';
 import { useMarketStore } from '../../store/useMarketStore';
 import { useTradeStore } from '../../store/useTradeStore';
-import { Drawing, Point } from '../../types/drawing';
+import { Drawing, DrawingTool, Point } from '../../types/drawing';
 import { IChartApi, ISeriesApi } from 'lightweight-charts';
+import { getInstrument, unitsToLots } from '../../domain/instruments';
+import { newId } from '../../utils/id';
+import { TimeframeSeconds, supportsSessions } from '../../domain/timeframes';
+import {
+  channelRails,
+  isPointInPolygon,
+  isPointInRect,
+  makeChannelPoints,
+  pointToRayDistance,
+  pointToSegmentDistance,
+  moveChannelEndpoint,
+} from '../../domain/geometry';
+
+/**
+ * Points d'un tracé à deux extrémités.
+ *
+ * Il existe deux voies de création — glisser-déposer et deux clics — et seule la
+ * première traitait le cas du canal. La seconde produisait un canal à deux
+ * points, donc d'écart nul : les deux rails se superposaient et la forme
+ * s'affichait comme une simple ligne.
+ */
+/**
+ * Largeur minimale, en pixels, sous laquelle l'étiquette d'une séance nuit.
+ *
+ * 26 px masquait les badges dès qu'on regardait une dizaine de jours en 5 min —
+ * un zoom de travail parfaitement normal, où un bloc de Londres fait ~25 px.
+ * Le seuil ne sert qu'à éviter l'empilement illisible des vues très dézoomées.
+ */
+const MIN_SESSION_LABEL_WIDTH = 12;
+
+function buildDrawingPoints(tool: DrawingTool, p0: Point, p1: Point): Point[] {
+  return tool === 'channel' ? makeChannelPoints(p0, p1) : [p0, p1];
+}
 
 interface DrawingCanvasProps {
   chart: IChartApi | null;
   mainSeries: ISeriesApi<'Candlestick' | 'Bar' | 'Line' | 'Area'> | null;
   width: number;
   height: number;
-}
-
-// ── GEOMETRIC UTILITIES FOR PRECISE HIT-TESTING ───────────────
-function pointToSegmentDistance(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
-  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  const projX = x1 + t * dx;
-  const projY = y1 + t * dy;
-  return Math.hypot(px - projX, py - projY);
-}
-
-function pointToRayDistance(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
-  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
-  t = Math.max(0, t);
-  const projX = x1 + t * dx;
-  const projY = y1 + t * dy;
-  return Math.hypot(px - projX, py - projY);
-}
-
-function isPointInRect(px: number, py: number, x1: number, y1: number, x2: number, y2: number, tolerance = 8): boolean {
-  const minX = Math.min(x1, x2) - tolerance;
-  const maxX = Math.max(x1, x2) + tolerance;
-  const minY = Math.min(y1, y2) - tolerance;
-  const maxY = Math.max(y1, y2) + tolerance;
-  return px >= minX && px <= maxX && py >= minY && py <= maxY;
 }
 
 interface SessionDef {
@@ -107,6 +108,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     removeDrawing,
     selectDrawing,
     setActiveTool,
+    commitDrawingEdit,
   } = useDrawingStore();
 
   const {
@@ -123,11 +125,24 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const {
     activePosition,
     pendingOrders,
-    closePosition,
+    closeAtMarket,
     updateActivePositionSlTp,
     updatePendingOrder,
     cancelPendingOrder,
   } = useTradeStore();
+
+  /**
+   * Pip size and price precision for the active instrument.
+   *
+   * Resolved once here instead of the eleven inline
+   * `currentSymbol.includes('JPY') ? 0.01 : 0.0001` / `price > 500 ? 2 : 5`
+   * derivations this file used to carry — those disagreed with the sizing rules
+   * in the trade store and mis-rendered gold, indices and crypto.
+   */
+  const instrument = useMemo(
+    () => getInstrument(currentSymbol, displayCandles[displayCandles.length - 1]?.close),
+    [currentSymbol, displayCandles]
+  );
 
   const drawPtsRef = useRef<Point[]>([]);
   const isMouseDownRef = useRef(false);
@@ -139,19 +154,19 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     orderId?: string;
   } | null>(null);
   const [isCtrlDown, setIsCtrlDown] = useState(false);
+  /**
+   * Annotation being typed, anchored where the user clicked. A native
+   * `prompt()` used to block the page with an unstyled box far from the chart.
+   */
+  const [textDraft, setTextDraft] = useState<{ x: number; y: number; pt: Point } | null>(null);
 
   // ── KEY LISTENERS (DELETE & CONTROL FOR OHLC SNAP) ────────
   useEffect(() => {
+    // Only Ctrl tracking lives here. Delete/Backspace is handled once, in the
+    // global keymap in `App`: both listeners used to fire for the same press, so
+    // a deletion pushed two history entries and undo needed two presses.
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Control') setIsCtrlDown(true);
-
-      const activeTag = (document.activeElement?.tagName || '').toLowerCase();
-      if (activeTag === 'input' || activeTag === 'textarea') return;
-
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedDrawingId) {
-        removeDrawing(selectedDrawingId);
-        selectDrawing(null);
-      }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Control') setIsCtrlDown(false);
@@ -162,7 +177,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [selectedDrawingId, removeDrawing, selectDrawing]);
+  }, []);
 
   // ── MEASURE BAR SPACING IN PIXELS ─────────────────────────
   const getBarSpacingPx = useCallback((): number => {
@@ -515,13 +530,40 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         }
       }
 
-      // Trendline / Channel
-      if ((d.type === 'trendline' || d.type === 'channel') && d.pts.length >= 2) {
+      // Trendline
+      if (d.type === 'trendline' && d.pts.length >= 2) {
         const p0 = toXY(d.pts[0].time, d.pts[0].price);
         const p1 = toXY(d.pts[1].time, d.pts[1].price);
         if (p0.x !== null && p0.y !== null && p1.x !== null && p1.y !== null) {
           if (pointToSegmentDistance(mx, my, p0.x, p0.y, p1.x, p1.y) < 14) {
             return { drawingId: d.id, handleIdx: null };
+          }
+        }
+      }
+
+      // Channel: either rail, or anywhere inside the band.
+      if (d.type === 'channel' && d.pts.length >= 2) {
+        const rails = channelRails(d.pts);
+        if (rails) {
+          const a0 = toXY(rails.baseline[0].time, rails.baseline[0].price);
+          const a1 = toXY(rails.baseline[1].time, rails.baseline[1].price);
+          const b0 = toXY(rails.parallel[0].time, rails.parallel[0].price);
+          const b1 = toXY(rails.parallel[1].time, rails.parallel[1].price);
+
+          if (
+            a0.x !== null && a0.y !== null && a1.x !== null && a1.y !== null &&
+            b0.x !== null && b0.y !== null && b1.x !== null && b1.y !== null
+          ) {
+            const onRail =
+              pointToSegmentDistance(mx, my, a0.x, a0.y, a1.x, a1.y) < 14 ||
+              pointToSegmentDistance(mx, my, b0.x, b0.y, b1.x, b1.y) < 14;
+            const inside = isPointInPolygon(mx, my, [
+              { x: a0.x, y: a0.y },
+              { x: a1.x, y: a1.y },
+              { x: b1.x, y: b1.y },
+              { x: b0.x, y: b0.y },
+            ]);
+            if (onRail || inside) return { drawingId: d.id, handleIdx: null };
           }
         }
       }
@@ -728,12 +770,14 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         forexSessions.nyOpenKZ ||
         forexSessions.londonCloseKZ);
 
-    // Calculate candle interval to strictly ensure intraday resolution (<= 1h)
+    // Les séances n'ont de sens qu'en intraday : une bougie journalière couvre
+    // Tokyo, Londres et New York à la fois. Même seuil que le menu de la barre
+    // supérieure, qui grise les options en conséquence.
     const sampleDt =
       displayCandles.length >= 2
         ? Math.abs(displayCandles[1].time - displayCandles[0].time)
-        : (activeTF || baseTF || 86400);
-    const isIntraday = sampleDt > 0 && sampleDt <= 3600 && (activeTF || 86400) <= 3600;
+        : (activeTF || baseTF || TimeframeSeconds.D1);
+    const isIntraday = supportsSessions(sampleDt) && supportsSessions(activeTF || TimeframeSeconds.D1);
 
     if (isAnySessionActive && isIntraday) {
       ctx.save();
@@ -741,6 +785,23 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const useLocal = Boolean(forexSessions.useLocalTz);
 
       const activeSessDefs = ALL_SESSIONS.filter((s) => Boolean((forexSessions as any)[s.key]));
+
+      /**
+       * Étiquettes différées.
+       *
+       * Chaque séance peint son ombrage sur toute la hauteur avant que la
+       * suivante ne dessine les siennes : avec plusieurs séances actives, les
+       * badges des premières finissaient enfouis sous les couches d'ombrage des
+       * suivantes. On les collecte ici et on les peint une fois toutes les
+       * séances rendues.
+       */
+      const pendingBadges: {
+        x: number;
+        y: number;
+        width: number;
+        text: string;
+        color: string;
+      }[] = [];
 
       for (const sess of activeSessDefs) {
         let blockStartIdx: number | null = null;
@@ -751,6 +812,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
         const sIdx = Math.max(0, startIdx - 2);
         const eIdx = Math.min(displayCandles.length - 1, endIdx + 2);
+
 
         for (let i = sIdx; i <= eIdx; i++) {
           const c = displayCandles[i];
@@ -824,32 +886,44 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                 // High / Low labels
                 ctx.fillStyle = sess.textColor;
                 ctx.font = `600 ${8 * dpr}px JetBrains Mono, monospace`;
-                ctx.fillText(`H: ${blockHigh.toFixed(blockHigh < 10 ? 5 : 2)}`, (blockEndX + 3) * dpr, (boxTop + 3) * dpr);
-                ctx.fillText(`L: ${blockLow.toFixed(blockLow < 10 ? 5 : 2)}`, (blockEndX + 3) * dpr, (boxBottom + 3) * dpr);
+                // Killzones et séances majeures se recouvrent (London KZ 7-10h
+                // vit dans Londres 8-17h) : sans décalage, leurs deux jeux
+                // d'étiquettes se superposaient et devenaient illisibles.
+                const labelDy = sess.isKillzone ? 11 * dpr : 3 * dpr;
+                ctx.fillText(`H: ${blockHigh.toFixed(instrument.decimals)}`, (blockEndX + 3) * dpr, boxTop * dpr + labelDy);
+                ctx.fillText(`L: ${blockLow.toFixed(instrument.decimals)}`, (blockEndX + 3) * dpr, boxBottom * dpr + labelDy);
               }
             }
 
             // Draw Session Badge label at top
-            if (forexSessions.showLabels !== false && blockStartX >= -100 && blockStartX <= width) {
-              const tagX = Math.max(4, blockStartX);
+            // Le badge suit le bloc dès qu'il *croise* la vue. Le tester sur son
+            // seul point de départ le faisait disparaître dès qu'on faisait
+            // défiler au-delà du début de la séance — pourtant bien visible.
+            const blockIntersectsView = blockEndX >= 0 && blockStartX <= width;
+            // Dézoomé, un bloc de séance fait quelques pixels : afficher son
+            // étiquette empilerait des dizaines de pastilles illisibles.
+            const blockIsLegible = blockEndX - blockStartX >= MIN_SESSION_LABEL_WIDTH;
+
+            if (forexSessions.showLabels !== false && blockIntersectsView && blockIsLegible) {
               const tagY = sess.isKillzone ? 22 * dpr : 5 * dpr;
               const textStr = `${sess.name} ${sess.startHour}h-${sess.endHour}h`;
 
               ctx.font = `bold ${8 * dpr}px JetBrains Mono, monospace`;
-              const textMetrics = ctx.measureText(textStr);
-              const pillW = textMetrics.width + 12 * dpr;
-              const pillH = 14 * dpr;
+              const pillW = ctx.measureText(textStr).width + 12 * dpr;
+              // Caler l'étiquette dans la partie visible du bloc, sans jamais
+              // déborder de la zone de dessin.
+              const pillWidthCss = pillW / dpr;
+              const minX = Math.max(4, blockStartX);
+              const maxX = Math.min(blockEndX - pillWidthCss, width - pillWidthCss - 4);
+              const tagX = maxX > minX ? minX : Math.max(4, maxX);
 
-              ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-              ctx.strokeStyle = sess.textColor;
-              ctx.lineWidth = 1 * dpr;
-              ctx.beginPath();
-              ctx.roundRect(tagX * dpr, tagY, pillW, pillH, 3 * dpr);
-              ctx.fill();
-              ctx.stroke();
-
-              ctx.fillStyle = sess.textColor;
-              ctx.fillText(textStr, (tagX + 6) * dpr, tagY + 10 * dpr);
+              pendingBadges.push({
+                x: tagX,
+                y: tagY,
+                width: pillWidthCss,
+                text: textStr,
+                color: sess.textColor,
+              });
             }
 
             // Reset block
@@ -858,7 +932,41 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             blockLow = Infinity;
           }
         }
+
       }
+
+      // Étiquettes en dernier, au-dessus de tous les ombrages. Une pastille qui
+      // en recouvrirait une autre sur la même ligne est omise : empilées, elles
+      // deviennent illisibles quand plusieurs séances se chevauchent.
+      const occupiedRows = new Map<number, { from: number; to: number }[]>();
+      const BADGE_GAP = 4;
+
+      ctx.font = `bold ${8 * dpr}px JetBrains Mono, monospace`;
+      for (const badge of pendingBadges) {
+        const taken = occupiedRows.get(badge.y) ?? [];
+        const overlaps = taken.some(
+          (slot) => badge.x < slot.to + BADGE_GAP && badge.x + badge.width + BADGE_GAP > slot.from
+        );
+        if (overlaps) continue;
+
+        taken.push({ from: badge.x, to: badge.x + badge.width });
+        occupiedRows.set(badge.y, taken);
+
+        const pillW = badge.width * dpr;
+        const pillH = 14 * dpr;
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = badge.color;
+        ctx.lineWidth = 1 * dpr;
+        ctx.beginPath();
+        ctx.roundRect(badge.x * dpr, badge.y, pillW, pillH, 3 * dpr);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = badge.color;
+        ctx.fillText(badge.text, (badge.x + 6) * dpr, badge.y + 10 * dpr);
+      }
+
       ctx.restore();
     }
 
@@ -866,8 +974,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     if (activePosition && mainSeries) {
       ctx.save();
       const isLong = activePosition.type === 'LONG';
-      const dec = currentSymbol.includes('JPY') || activePosition.entry > 500 ? 2 : 5;
-      const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+      const dec = instrument.decimals;
+      const pip = instrument.pip;
       const entryY = mainSeries.priceToCoordinate(activePosition.entry);
       const slY = activePosition.sl ? mainSeries.priceToCoordinate(activePosition.sl) : null;
       const tpY = activePosition.tp ? mainSeries.priceToCoordinate(activePosition.tp) : null;
@@ -895,7 +1003,10 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
         ctx.fillStyle = '#0B0E14';
         ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
-        ctx.fillText(`${isLong ? '▲ ACHAT' : '▼ VENTE'} ${activePosition.size}L @ ${activePosition.entry.toFixed(dec)}`, (bx + 6) * dpr, (entryY + 4) * dpr);
+        // `size` is in base-asset units (see `types/trading`), so printing it
+        // with an "L" suffix announced 100 000 L for a one-lot EUR/USD position.
+        const lots = unitsToLots(activePosition.symbol ?? currentSymbol, activePosition.size);
+        ctx.fillText(`${isLong ? '▲ ACHAT' : '▼ VENTE'} ${lots.toFixed(2)} L @ ${activePosition.entry.toFixed(dec)}`, (bx + 6) * dpr, (entryY + 4) * dpr);
 
         let chipOffset = 36;
         // Close Button [✕] inside badge
@@ -1001,8 +1112,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       ctx.save();
       for (const order of pendingOrders) {
         const isLong = order.type === 'LONG';
-        const dec = currentSymbol.includes('JPY') || order.targetPrice > 500 ? 2 : 5;
-        const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+        const dec = instrument.decimals;
+        const pip = instrument.pip;
         const orderY = mainSeries.priceToCoordinate(order.targetPrice);
         const slY = order.sl ? mainSeries.priceToCoordinate(order.sl) : null;
         const tpY = order.tp ? mainSeries.priceToCoordinate(order.tp) : null;
@@ -1029,7 +1140,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
           ctx.fillStyle = '#FFFFFF';
           ctx.font = `bold ${9.5 * dpr}px JetBrains Mono, monospace`;
-          ctx.fillText(`⏳ ${isLong ? 'ACHAT' : 'VENTE'} ${order.orderType} @ ${order.targetPrice.toFixed(dec)}`, (bx + 6) * dpr, (orderY + 4) * dpr);
+          ctx.fillText(`${isLong ? 'Achat' : 'Vente'} ${order.orderType === 'LIMIT' ? 'limite' : 'stop'} · ${order.targetPrice.toFixed(dec)}`, (bx + 6) * dpr, (orderY + 4) * dpr);
 
           let chipOffset = 36;
           // Cancel Button [✕]
@@ -1176,6 +1287,53 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.lineTo(p1.x * dpr, p1.y * dpr);
           ctx.stroke();
         }
+      } else if (d.type === 'channel' && d.pts.length >= 2) {
+        // Parallel channel: baseline, a rail offset by a constant *price*
+        // distance, the band between them, and a dashed median.
+        const rails = channelRails(d.pts);
+        if (rails) {
+          const a0 = toXY(rails.baseline[0].time, rails.baseline[0].price);
+          const a1 = toXY(rails.baseline[1].time, rails.baseline[1].price);
+          const b0 = toXY(rails.parallel[0].time, rails.parallel[0].price);
+          const b1 = toXY(rails.parallel[1].time, rails.parallel[1].price);
+
+          const hasAll =
+            a0.x !== null && a0.y !== null && a1.x !== null && a1.y !== null &&
+            b0.x !== null && b0.y !== null && b1.x !== null && b1.y !== null;
+
+          if (hasAll) {
+            const ax0 = a0.x! * dpr, ay0 = a0.y! * dpr;
+            const ax1 = a1.x! * dpr, ay1 = a1.y! * dpr;
+            const bx0 = b0.x! * dpr, by0 = b0.y! * dpr;
+            const bx1 = b1.x! * dpr, by1 = b1.y! * dpr;
+
+            ctx.beginPath();
+            ctx.moveTo(ax0, ay0);
+            ctx.lineTo(ax1, ay1);
+            ctx.lineTo(bx1, by1);
+            ctx.lineTo(bx0, by0);
+            ctx.closePath();
+            ctx.fillStyle = d.style.fill || 'rgba(59, 130, 246, 0.12)';
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.moveTo(ax0, ay0);
+            ctx.lineTo(ax1, ay1);
+            ctx.moveTo(bx0, by0);
+            ctx.lineTo(bx1, by1);
+            ctx.stroke();
+
+            ctx.save();
+            ctx.setLineDash([5 * dpr, 5 * dpr]);
+            ctx.globalAlpha = 0.55;
+            ctx.lineWidth = Math.max(1, (d.style.width || 2) * 0.6) * dpr;
+            ctx.beginPath();
+            ctx.moveTo((ax0 + bx0) / 2, (ay0 + by0) / 2);
+            ctx.lineTo((ax1 + bx1) / 2, (ay1 + by1) / 2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
       } else if (d.type === 'ray' && d.pts.length >= 2) {
         const p0 = toXY(d.pts[0].time, d.pts[0].price);
         const p1 = toXY(d.pts[1].time, d.pts[1].price);
@@ -1199,7 +1357,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
           ctx.fillStyle = d.style.color || '#3B82F6';
           ctx.font = `bold ${10 * dpr}px JetBrains Mono, monospace`;
-          ctx.fillText(d.pts[0].price.toFixed(5), (width - 70) * dpr, (p.y - 4) * dpr);
+          // `toFixed(5)` printed an hline on gold as "2451.32000"; every other
+          // label in this file already uses the instrument's own precision.
+          ctx.fillText(d.pts[0].price.toFixed(instrument.decimals), (width - 70) * dpr, (p.y - 4) * dpr);
         }
       } else if (d.type === 'vline' && d.pts.length >= 1) {
         const p = toXY(d.pts[0].time, d.pts[0].price);
@@ -1246,7 +1406,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           const dy = p1.y - p0.y;
           const minX = Math.min(p0.x, p1.x) * dpr;
           const maxX = Math.max(p0.x, p1.x) * dpr;
-          const dec = currentSymbol.includes('JPY') || d.pts[0].price > 500 ? 2 : 5;
+          const dec = instrument.decimals;
 
           // 1. Subtle dashed trend impulse anchor line
           ctx.save();
@@ -1308,8 +1468,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         if (pEntry.x !== null && pEntry.y !== null && pTP.x !== null && pTP.y !== null && pSL.x !== null && pSL.y !== null) {
           const rx = Math.min(pEntry.x, pTP.x) * dpr;
           const rw = Math.max(80, Math.abs(pTP.x - pEntry.x)) * dpr;
-          const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
-          const dec = currentSymbol.includes('JPY') || d.pts[0].price > 500 ? 2 : 5;
+          const pip = instrument.pip;
+          const dec = instrument.decimals;
 
           // Target Zone (Green)
           ctx.fillStyle = 'rgba(0, 196, 110, 0.20)';
@@ -1451,6 +1611,38 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             ctx.fillStyle = 'rgba(59, 130, 246, 0.14)';
             ctx.fillRect(rx, ry, rw, rh);
             ctx.strokeRect(rx, ry, rw, rh);
+          } else if (activeTool === 'channel') {
+            // Preview the actual band, so the shape the user releases on is the
+            // shape they saw — the old preview drew a bare line.
+            const preview = channelRails(
+              makeChannelPoints(drawPtsRef.current[0], drawPtsRef.current[1])
+            );
+            const b0 = preview && toXY(preview.parallel[0].time, preview.parallel[0].price);
+            const b1 = preview && toXY(preview.parallel[1].time, preview.parallel[1].price);
+
+            ctx.beginPath();
+            ctx.moveTo(p0.x * dpr, p0.y * dpr);
+            ctx.lineTo(p1.x * dpr, p1.y * dpr);
+            ctx.stroke();
+
+            if (b0 && b1 && b0.x !== null && b0.y !== null && b1.x !== null && b1.y !== null) {
+              ctx.beginPath();
+              ctx.moveTo(b0.x * dpr, b0.y * dpr);
+              ctx.lineTo(b1.x * dpr, b1.y * dpr);
+              ctx.stroke();
+
+              ctx.save();
+              ctx.setLineDash([]);
+              ctx.fillStyle = 'rgba(59, 130, 246, 0.10)';
+              ctx.beginPath();
+              ctx.moveTo(p0.x * dpr, p0.y * dpr);
+              ctx.lineTo(p1.x * dpr, p1.y * dpr);
+              ctx.lineTo(b1.x * dpr, b1.y * dpr);
+              ctx.lineTo(b0.x * dpr, b0.y * dpr);
+              ctx.closePath();
+              ctx.fill();
+              ctx.restore();
+            }
           } else {
             ctx.beginPath();
             ctx.moveTo(p0.x * dpr, p0.y * dpr);
@@ -1461,19 +1653,31 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       }
       ctx.restore();
     }
-  }, [drawings, selectedDrawingId, activeTool, currentStyle, toXY, width, height, mainSeries, separatorTF, forexSessions, activePosition, pendingOrders, displayCandles, getBarSpacingPx, chart, activeIndicators, activeTF, baseTF, currentSymbol]);
+  }, [drawings, selectedDrawingId, activeTool, currentStyle, toXY, width, height, mainSeries, separatorTF, forexSessions, activePosition, pendingOrders, displayCandles, getBarSpacingPx, chart, activeIndicators, activeTF, baseTF, instrument, currentSymbol]);
 
   useEffect(() => {
     redraw();
   }, [redraw, width, height, sortedTimes, displayCandles, separatorTF, forexSessions, activeTF, activeIndicators, pendingOrders]);
 
+  // Pan and zoom emit range changes far faster than one per frame. Coalesce
+  // them into a single pending frame and cancel it on cleanup — the previous
+  // version queued an unbounded number of callbacks, and any still in flight
+  // after unmount drew into a detached canvas.
   useEffect(() => {
     if (!chart) return;
+
+    let frame: number | null = null;
     const handler = () => {
-      requestAnimationFrame(redraw);
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        redraw();
+      });
     };
+
     chart.timeScale().subscribeVisibleLogicalRangeChange(handler);
     return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(handler);
     };
   }, [chart, redraw]);
@@ -1492,10 +1696,14 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     // Check click / drag on Position / Pending Order Lines or Badges
     const tradeHit = hitTestTrade(mx, my);
     if (tradeHit) {
-      const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+      const pip = instrument.pip;
+      // Moving a stop or closing while reviewing past candles is lookahead:
+      // the user has already seen where the price goes.
+      if (blockTradingInThePast()) return;
 
       if (tradeHit.action === 'CLOSE_ACTIVE') {
-        closePosition('MANUAL');
+        const candle = currentTradingCandle();
+        if (candle) closeAtMarket(candle.close, candle.time);
         redraw();
         return;
       }
@@ -1622,13 +1830,13 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       return;
     }
 
-    const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+    const pip = instrument.pip;
 
     // Direct 1-Click Placement tools
     if (activeTool === 'pos_long' || activeTool === 'pos_short') {
       const isLong = activeTool === 'pos_long';
       const newD: Drawing = {
-        id: 'draw_' + Date.now(),
+        id: newId('draw'),
         type: activeTool,
         pts: [
           pt,
@@ -1646,7 +1854,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     if (activeTool === 'hline') {
       const newD: Drawing = {
-        id: 'draw_' + Date.now(),
+        id: newId('draw'),
         type: 'hline',
         pts: [pt],
         style: currentStyle,
@@ -1660,7 +1868,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     if (activeTool === 'vline') {
       const newD: Drawing = {
-        id: 'draw_' + Date.now(),
+        id: newId('draw'),
         type: 'vline',
         pts: [pt],
         style: currentStyle,
@@ -1673,17 +1881,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     }
 
     if (activeTool === 'text') {
-      const textVal = prompt('Texte de l\'annotation :', 'Zone de liquidité');
-      if (textVal) {
-        const newD: Drawing = {
-          id: 'draw_' + Date.now(),
-          type: 'text',
-          pts: [pt],
-          style: { ...currentStyle, text: textVal },
-        };
-        addDrawing(newD);
-        selectDrawing(newD.id);
-      }
+      setTextDraft({ x: mx, y: my, pt });
       drawPtsRef.current = [];
       setActiveTool('cursor');
       return;
@@ -1696,9 +1894,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     } else {
       const p0 = drawPtsRef.current[0];
       const newD: Drawing = {
-        id: 'draw_' + Date.now(),
+        id: newId('draw'),
         type: activeTool,
-        pts: [p0, pt],
+        pts: buildDrawingPoints(activeTool, p0, pt),
         style: currentStyle,
       };
       addDrawing(newD);
@@ -1718,7 +1916,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     // 0. Dragging Active Trade / Pending Order Lines
     if (dragTradeRef.current && isMouseDownRef.current) {
-      const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+      const pip = instrument.pip;
       const minDistance = pip * 2;
       const { type, orderId } = dragTradeRef.current;
 
@@ -1810,7 +2008,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       if (d) {
         if (d.type === 'pos_long' || d.type === 'pos_short') {
           const isLong = d.type === 'pos_long';
-          const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+          const pip = instrument.pip;
           const minDistance = pip * 2;
           const newPts = [...d.pts];
           const entryPrice = newPts[0].price;
@@ -1847,6 +2045,15 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           }
 
           updateDrawing(drawingId, { pts: newPts });
+          redraw();
+          return;
+        }
+
+        // Moving a channel endpoint must carry the width anchor with it,
+        // otherwise the offset is recomputed against the new baseline and the
+        // band collapses or flips as the slope changes.
+        if (d.type === 'channel' && (ptIdx === 0 || ptIdx === 1)) {
+          updateDrawing(drawingId, { pts: moveChannelEndpoint(d.pts, ptIdx, pt) });
           redraw();
           return;
         }
@@ -1914,9 +2121,17 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isMouseDownRef.current) return;
     isMouseDownRef.current = false;
+
+    // Dragging a shape mutated it through `updateDrawing`, which never touched
+    // the history — so Ctrl+Z skipped the move entirely and jumped to the state
+    // before it. Close the gesture with a single undo step.
+    const wasDraggingShape = dragHandleRef.current !== null || dragBodyRef.current !== null;
+
     dragHandleRef.current = null;
     dragBodyRef.current = null;
     dragTradeRef.current = null;
+
+    if (wasDraggingShape) commitDrawingEdit();
 
     if (!mouseDownPosRef.current) return;
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -1929,9 +2144,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const p0 = drawPtsRef.current[0];
       const p1 = drawPtsRef.current[1];
       const newD: Drawing = {
-        id: 'draw_' + Date.now(),
+        id: newId('draw'),
         type: activeTool,
-        pts: [p0, p1],
+        pts: buildDrawingPoints(activeTool, p0, p1),
         style: currentStyle,
       };
       addDrawing(newD);
@@ -2019,7 +2234,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   }
 
   return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+    <div className="u-position-absolute u-inset-0 u-overflow-hidden">
       <canvas
         ref={canvasRef}
         id="draw-canvas"
@@ -2041,6 +2256,42 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
       />
+
+      {textDraft && (
+        <input
+          className="annotation-input"
+          autoFocus
+          placeholder="Texte de l’annotation — Entrée pour valider"
+          aria-label="Texte de l’annotation"
+          style={{ left: `${textDraft.x}px`, top: `${textDraft.y}px` }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              // Vider d'abord : le démontage peut encore émettre un `blur`,
+              // qui validerait sinon le texte qu'on vient d'abandonner.
+              e.currentTarget.value = '';
+              setTextDraft(null);
+            } else if (e.key === 'Enter') {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          onBlur={(e) => {
+            const text = e.currentTarget.value.trim();
+            const draft = textDraft;
+            setTextDraft(null);
+            if (!text) return;
+            const newD: Drawing = {
+              id: newId('draw'),
+              type: 'text',
+              pts: [draft.pt],
+              style: { ...currentStyle, text },
+            };
+            addDrawing(newD);
+            selectDrawing(newD.id);
+          }}
+        />
+      )}
 
       {/* Floating Action Toolbar for Selected Drawing */}
       {selectedDrawing && toolbarPos && (
@@ -2064,7 +2315,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           }}
         >
           {isRR ? (
-            <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#94A3B8', paddingRight: '4px', letterSpacing: '0.03em' }}>
+            <span className="u-font-size-10_5px u-font-weight-700 u-color-94a3b8 u-padding-right-4px u-letter-spacing-0_03em">
               {selectedDrawing.type === 'pos_long' ? '📈 ACHAT' : '📉 VENTE'}
             </span>
           ) : (
@@ -2088,34 +2339,22 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                 />
               ))}
 
-              <div style={{ width: '1px', height: '14px', background: 'rgba(255,255,255,0.15)', margin: '0 2px' }} />
+              <div className="u-width-1px u-height-14px u-background-rgba-255-255-255-0_15 u-margin-0-2px" />
             </>
           )}
 
           {/* Duplicate button */}
           <button
             onClick={() => {
-              const pip = currentSymbol.includes('JPY') ? 0.01 : 0.0001;
+              const pip = instrument.pip;
               const dup: Drawing = {
                 ...selectedDrawing,
-                id: 'draw_' + Date.now(),
+                id: newId('draw'),
                 pts: selectedDrawing.pts.map((p) => ({ time: p.time, price: p.price + pip * 10 })),
               };
               addDrawing(dup);
               selectDrawing(dup.id);
-            }}
-            style={{
-              background: 'rgba(255, 255, 255, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
-              color: '#CBD5E1',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '4px 6px',
-              borderRadius: '5px',
-              transition: 'background 0.15s ease',
-            }}
+            }} className="u-background-rgba-255-255-255-0_06 u-border-7eec68 u-color-cbd5e1 u-cursor-pointer u-display-flex u-align-items-center u-justify-content-center u-padding-4px-6px u-border-radius-5px u-transition-background-0_15s-ease"
             title="Dupliquer"
           >
             <Copy size={13} strokeWidth={2} />
@@ -2126,19 +2365,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             onClick={() => {
               removeDrawing(selectedDrawing.id);
               selectDrawing(null);
-            }}
-            style={{
-              background: 'rgba(244, 63, 94, 0.18)',
-              border: '1px solid rgba(244, 63, 94, 0.35)',
-              color: '#F43F5E',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '4px 6px',
-              borderRadius: '5px',
-              transition: 'background 0.15s ease',
-            }}
+            }} className="u-background-rgba-244-63-94-0_18 u-border-d4a8b5 u-color-f43f5e u-cursor-pointer u-display-flex u-align-items-center u-justify-content-center u-padding-4px-6px u-border-radius-5px u-transition-background-0_15s-ease"
             title="Supprimer (Touche Suppr)"
           >
             <Trash2 size={13} strokeWidth={2} />

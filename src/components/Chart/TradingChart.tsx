@@ -1,17 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { createChart, IChartApi, ISeriesApi } from 'lightweight-charts';
+import { createChart, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts';
 import { Scissors, History, TrendingUp, UploadCloud, Play } from 'lucide-react';
 import { useMarketStore } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { useUIStore } from '../../store/useUIStore';
 import { DrawingCanvas } from './DrawingCanvas';
-import { fetchHistoricalData } from '../../services/historicalApi';
+import { fetchHistoricalSeries, PROVENANCE_LABELS } from '../../services/historicalApi';
 import { Candle, ActiveIndicator } from '../../types/market';
+import { computeIndicator, DEFAULT_PERIODS } from '../../domain/indicators';
+import { indexAtOrAfter } from '../../domain/candles';
+import { formatPrice } from '../../domain/instruments';
+import { useChartViewport } from './useChartViewport';
+
+/**
+ * Narrow an epoch-seconds number to lightweight-charts' branded `Time`.
+ *
+ * One documented conversion point instead of the `time: c.time as any` casts
+ * that were scattered through the data and drawing layers.
+ */
+const asChartTime = (epochSeconds: number): UTCTimestamp => epochSeconds as UTCTimestamp;
 
 function applyResponsiveScaleMargins(
-  chart: any,
+  chart: IChartApi | null,
   showVolume: boolean,
-  activeIndicators: ActiveIndicator[]
+  activeIndicators: readonly ActiveIndicator[]
 ) {
   if (!chart) return;
   const hasSubPanes = activeIndicators.some((i) => i.type === 'RSI' || i.type === 'MACD');
@@ -77,11 +89,23 @@ export const TradingChart: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [hoverCandleInfo, setHoverCandleInfo] = useState<{ x: number; time: number; candle: Candle } | null>(null);
 
-  const lastVisibleRangeRef = useRef<{ from: number; to: number } | null>(null);
   const prevTFRef = useRef<number | null>(null);
   const prevSymbolRef = useRef<string | null>(null);
   const prevReplayActiveRef = useRef<boolean>(false);
-  const lastReplayJumpIdxRef = useRef<number | null>(null);
+  const prevReplayIndexRef = useRef<number | null>(null);
+  const prevBarCountRef = useRef(0);
+  const prevDisplayCandlesRef = useRef<Candle[] | null>(null);
+  /**
+   * Latched viewport intent.
+   *
+   * Entering replay flips `isActive` in one store update and rewrites
+   * `displayCandles` in another (ReplayBar's slice effect). This effect
+   * therefore runs once with the new mode but the *old* data. Reading the mode
+   * edge directly meant that run consumed the "recentre" intent, and the run
+   * that actually carried the replay slice fell through to the preserve branch
+   * — leaving 2 800 bars crammed at the minimum bar spacing, i.e. a blank chart.
+   */
+  const pendingIntentRef = useRef<'refit' | 'keep-time' | null>(null);
 
   const {
     displayCandles,
@@ -93,9 +117,24 @@ export const TradingChart: React.FC = () => {
     activeIndicators,
     currentFitContentTrigger,
     currentSymbol,
+    dataSourceLabel,
+    isSimulatedData,
+    hasVolumeData,
     setBaseCandles,
     setSymbol,
+    setDataSource,
   } = useMarketStore();
+
+  const viewport = useChartViewport(chart);
+
+  /**
+   * Le volume ne s'affiche que si la série en porte réellement.
+   *
+   * Sans cette condition, une source qui n'en publie pas (BCE, synthétiques
+   * Deriv) laissait un histogramme entièrement nul occuper 17 % de la hauteur :
+   * une bande écrasée au bas du graphique, qui se lisait comme un bug.
+   */
+  const volumeVisible = showVolume && hasVolumeData;
 
   const { isPicking, isActive: isReplayActive, currentIndex, setStartIndex, setCurrentIndex, setIsActive, setIsPicking } = useReplayStore();
   const { openModal, showToast, activeModal, setSnapshotDataUrl } = useUIStore();
@@ -146,13 +185,6 @@ export const TradingChart: React.FC = () => {
     setChart(newChart);
     setVolumeSeries(vSeries);
 
-    const handleTimeRangeChange = (range: any) => {
-      if (range && typeof range.from === 'number' && typeof range.to === 'number') {
-        lastVisibleRangeRef.current = { from: range.from, to: range.to };
-      }
-    };
-    newChart.timeScale().subscribeVisibleTimeRangeChange(handleTimeRangeChange);
-
     const handleResize = () => {
       if (chartWrapperRef.current) {
         const w = chartWrapperRef.current.clientWidth;
@@ -182,10 +214,10 @@ export const TradingChart: React.FC = () => {
       },
     });
     if (volumeSeries) {
-      volumeSeries.applyOptions({ visible: showVolume });
+      volumeSeries.applyOptions({ visible: volumeVisible });
     }
-    applyResponsiveScaleMargins(chart, showVolume, activeIndicators);
-  }, [chart, showGrid, showVolume, volumeSeries, activeIndicators]);
+    applyResponsiveScaleMargins(chart, volumeVisible, activeIndicators);
+  }, [chart, showGrid, volumeVisible, volumeSeries, activeIndicators]);
 
   // ── UPDATE MAIN SERIES TYPE ───────────────────────────────
   useEffect(() => {
@@ -220,14 +252,20 @@ export const TradingChart: React.FC = () => {
       });
     }
 
-    requestAnimationFrame(() => {
-      setMainSeries(newMain);
-    });
+    // Deferring the state write by one frame lets the chart finish wiring the
+    // series. The handle must be cancelled on cleanup: switching chart type
+    // twice quickly otherwise published a series the cleanup had just removed,
+    // and the next `setData` ran against a disposed object.
+    const frame = requestAnimationFrame(() => setMainSeries(newMain));
 
     return () => {
+      cancelAnimationFrame(frame);
+      setMainSeries((current) => (current === newMain ? null : current));
       try {
         chart.removeSeries(newMain);
-      } catch {}
+      } catch {
+        // The chart may already be disposed; nothing to clean up.
+      }
     };
   }, [chart, chartType]);
 
@@ -235,30 +273,47 @@ export const TradingChart: React.FC = () => {
   useEffect(() => {
     if (!mainSeries || !displayCandles.length) return;
 
-    const isTFChange = prevTFRef.current !== null && prevTFRef.current !== activeTF;
+    const isFirstData = prevTFRef.current === null;
+    const isTFChange = !isFirstData && prevTFRef.current !== activeTF;
     const isSymbolChange = prevSymbolRef.current !== null && prevSymbolRef.current !== currentSymbol;
     const isReplayJustStarted = !prevReplayActiveRef.current && isReplayActive;
-    const isReplayJump =
+    const isReplayJustStopped = prevReplayActiveRef.current && !isReplayActive;
+    // A cursor move of more than a few bars is a seek (anchor, random start,
+    // date jump), not playback — the viewport should re-centre for those.
+    const isReplaySeek =
       isReplayActive &&
-      lastReplayJumpIdxRef.current !== null &&
-      Math.abs(currentIndex - lastReplayJumpIdxRef.current) > 3;
+      prevReplayIndexRef.current !== null &&
+      Math.abs(currentIndex - prevReplayIndexRef.current) > 3;
+
+    // Snapshot the user's view *before* `setData` replaces the series. Reading
+    // it afterwards returns the library's recomputed range, not the user's.
+    const snapshot = viewport.capture(prevBarCountRef.current);
+
+    // Latch the intent now; apply it once the data catches up.
+    if (isSymbolChange || isFirstData || isReplayJustStopped || isReplayJustStarted || isReplaySeek) {
+      pendingIntentRef.current = 'refit';
+    } else if (isTFChange) {
+      pendingIntentRef.current = 'keep-time';
+    }
+
+    const dataChanged = prevDisplayCandlesRef.current !== displayCandles;
 
     prevTFRef.current = activeTF;
     prevSymbolRef.current = currentSymbol;
     prevReplayActiveRef.current = isReplayActive;
-    lastReplayJumpIdxRef.current = currentIndex;
-
-    const savedRange = lastVisibleRangeRef.current;
+    prevReplayIndexRef.current = currentIndex;
+    prevBarCountRef.current = displayCandles.length;
+    prevDisplayCandlesRef.current = displayCandles;
 
     // Apply data
     if (chartType === 'Line' || chartType === 'Area') {
       mainSeries.setData(
-        displayCandles.map((c) => ({ time: c.time as any, value: c.close }))
+        displayCandles.map((c) => ({ time: asChartTime(c.time), value: c.close }))
       );
     } else {
       mainSeries.setData(
         displayCandles.map((c) => ({
-          time: c.time as any,
+          time: asChartTime(c.time),
           open: c.open,
           high: c.high,
           low: c.low,
@@ -269,19 +324,27 @@ export const TradingChart: React.FC = () => {
 
     if (volumeSeries) {
       volumeSeries.applyOptions({
-        visible: showVolume,
+        visible: volumeVisible,
         lastValueVisible: false,
         priceLineVisible: false,
       });
-      if (showVolume) {
-        volumeSeries.setData(
-          displayCandles.map((c) => ({
-            time: c.time as any,
-            value: c.volume,
-            color: c.close >= c.open ? 'rgba(16, 185, 129, 0.40)' : 'rgba(244, 63, 94, 0.40)',
-          }))
-        );
-      }
+
+      // Toujours écrire les données, quitte à les vider.
+      //
+      // `visible: false` masque le tracé mais la série garde ses points, et
+      // leurs horodatages appartiennent toujours à l'échelle de temps du
+      // graphique. En passant d'un instrument avec volume à un instrument sans,
+      // l'ancienne série étirait l'axe sur deux plages disjointes : des années
+      // à gauche, des jours à droite, et des barres fantômes par-dessus.
+      volumeSeries.setData(
+        volumeVisible
+          ? displayCandles.map((c) => ({
+              time: asChartTime(c.time),
+              value: c.volume,
+              color: c.close >= c.open ? 'rgba(16, 185, 129, 0.40)' : 'rgba(244, 63, 94, 0.40)',
+            }))
+          : []
+      );
     }
 
     // Render Indicators
@@ -296,10 +359,7 @@ export const TradingChart: React.FC = () => {
         }
       });
 
-      // 2. Adjust margins dynamically
-      applyResponsiveScaleMargins(chart, showVolume, activeIndicators);
-
-      // 3. Add or update indicators
+      // 2. Add or update indicators
       activeIndicators.forEach((ind) => {
         try {
           let s = indicatorSeriesMapRef.current.get(ind.id);
@@ -318,119 +378,56 @@ export const TradingChart: React.FC = () => {
 
           if (!displayCandles || displayCandles.length === 0) return;
 
-          const p = ind.period || (isRSI ? 14 : isMACD ? 12 : 20);
-          const indData: any[] = [];
+          const period = ind.period || DEFAULT_PERIODS[ind.type];
+          const indData = computeIndicator(ind.type, displayCandles, period);
 
-          if (isRSI) {
-            if (displayCandles.length > p) {
-              let gains = 0, losses = 0;
-              for (let i = 1; i <= p; i++) {
-                const diff = displayCandles[i].close - displayCandles[i - 1].close;
-                if (diff >= 0) gains += diff;
-                else losses -= diff;
-              }
-              let avgGain = gains / p;
-              let avgLoss = losses / p;
-              let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-              indData.push({ time: displayCandles[p].time, value: 100 - (100 / (1 + rs)) });
-
-              for (let i = p + 1; i < displayCandles.length; i++) {
-                const diff = displayCandles[i].close - displayCandles[i - 1].close;
-                const gain = diff > 0 ? diff : 0;
-                const loss = diff < 0 ? -diff : 0;
-                avgGain = (avgGain * (p - 1) + gain) / p;
-                avgLoss = (avgLoss * (p - 1) + loss) / p;
-                rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-                indData.push({ time: displayCandles[i].time, value: 100 - (100 / (1 + rs)) });
-              }
-            }
-          } else if (isMACD) {
-            if (displayCandles.length >= 26) {
-              const k12 = 2 / 13, k26 = 2 / 27;
-              let ema12 = displayCandles[0].close, ema26 = displayCandles[0].close;
-              for (let i = 1; i < displayCandles.length; i++) {
-                ema12 = displayCandles[i].close * k12 + ema12 * (1 - k12);
-                ema26 = displayCandles[i].close * k26 + ema26 * (1 - k26);
-                if (i >= 26) {
-                  indData.push({ time: displayCandles[i].time, value: ema12 - ema26 });
-                }
-              }
-            }
-          } else if (ind.type === 'EMA') {
-            if (displayCandles.length >= p) {
-              const k = 2 / (p + 1);
-              let ema = displayCandles[0].close;
-              for (let i = 0; i < displayCandles.length; i++) {
-                ema = displayCandles[i].close * k + ema * (1 - k);
-                if (i >= p - 1) {
-                  indData.push({ time: displayCandles[i].time, value: ema });
-                }
-              }
-            }
-          } else {
-            // SMA
-            if (displayCandles.length >= p) {
-              for (let i = p - 1; i < displayCandles.length; i++) {
-                let sum = 0;
-                for (let k = i - p + 1; k <= i; k++) sum += displayCandles[k].close;
-                indData.push({ time: displayCandles[i].time, value: sum / p });
-              }
-            }
-          }
-
-          s.setData(indData);
+          s.setData(indData.map((point) => ({ time: asChartTime(point.time), value: point.value })));
         } catch (err) {
           console.warn(`Error updating indicator ${ind.type}:`, err);
         }
       });
 
-      // Viewport Control
-      if (isReplayActive) {
-        const count = displayCandles.length;
-        if (count > 0) {
-          const currentLogical = chart.timeScale().getVisibleLogicalRange();
-          // Truly out of bounds only if 100% of visible area contains zero candles (completely in empty void)
-          const isCompletelyEmpty =
-            !currentLogical ||
-            currentLogical.from >= count ||
-            currentLogical.to <= 0;
+      // 3. Adjust scale margins — *after* the series exist.
+      //
+      // A price scale only comes into being when a series references it. Calling
+      // `chart.priceScale('rsi_pane')` before that either threw (swallowed by the
+      // catch) or configured a scale the new series then replaced with defaults,
+      // so the RSI autoscaled across the whole pane and drew over the candles on
+      // the price axis instead of sitting in its own band.
+      applyResponsiveScaleMargins(chart, volumeVisible, activeIndicators);
 
-          if (isReplayJustStarted || isReplayJump || isCompletelyEmpty) {
-            lastVisibleRangeRef.current = null;
-            chart.timeScale().setVisibleLogicalRange({
-              from: Math.max(0, count - 65),
-              to: count + 8,
-            });
-          } else if (currentLogical && currentLogical.to <= count + 1) {
-            // Auto-advance view as replay plays forward while strictly preserving the user's zoom level (span)!
-            const span = currentLogical.to - currentLogical.from;
-            chart.timeScale().setVisibleLogicalRange({
-              from: count - span + 6,
-              to: count + 6,
-            });
-          }
+      // ── Viewport ──
+      // Only act when the series actually changed. Re-running for a chart-type
+      // or indicator toggle must not move the user's view.
+      if (dataChanged) {
+        const intent = pendingIntentRef.current;
+        pendingIntentRef.current = null;
+
+        if (intent === 'refit') {
+          // New instrument, first paint, or a jump to a new point in history:
+          // rebuild a readable window around the end of the series.
+          viewport.apply(snapshot, displayCandles, { refit: true });
+        } else if (intent === 'keep-time') {
+          // Same market, different granularity: hold the wall-clock window so
+          // the user stays on the price action they were reading.
+          viewport.apply(snapshot, displayCandles, { keepTimeWindow: true });
+        } else if (isReplayActive) {
+          // Playback: advance with the last candle, but only while the user is
+          // watching the edge. Panning back into history now stays put.
+          viewport.apply(snapshot, displayCandles, { followTail: true });
+        } else {
+          viewport.apply(snapshot, displayCandles);
         }
-      } else if (isTFChange && savedRange && savedRange.from && savedRange.to) {
-        // Preserve viewport across TF switches
-        try {
-          chart.timeScale().setVisibleRange({
-            from: savedRange.from as any,
-            to: savedRange.to as any,
-          });
-        } catch {}
-      } else if (isSymbolChange || !savedRange) {
-        lastVisibleRangeRef.current = null;
-        chart.timeScale().fitContent();
       }
     }
-  }, [mainSeries, volumeSeries, displayCandles, chartType, showVolume, chart, activeIndicators, activeTF, currentSymbol, isReplayActive, currentIndex]);
+  }, [mainSeries, volumeSeries, displayCandles, chartType, volumeVisible, chart, activeIndicators, activeTF, currentSymbol, isReplayActive, currentIndex, viewport]);
 
   // ── FIT CONTENT TRIGGER ───────────────────────────────────
   useEffect(() => {
     if (currentFitContentTrigger > 0 && chart) {
-      chart.timeScale().fitContent();
+      viewport.fit();
     }
-  }, [currentFitContentTrigger, chart]);
+  }, [currentFitContentTrigger, chart, viewport]);
 
   // ── SNAPSHOT CAPTURE ──────────────────────────────────────
   useEffect(() => {
@@ -477,10 +474,10 @@ export const TradingChart: React.FC = () => {
     const mx = e.clientX - rect.left;
     const time = chart.timeScale().coordinateToTime(mx) as number | null;
     if (time) {
-      let idx = baseCandles.findIndex((c) => c.time >= time);
-      if (idx === -1) idx = baseCandles.length - 1;
+      const found = indexAtOrAfter(baseCandles, time);
+      const idx = found === -1 ? baseCandles.length - 1 : found;
       const candle = baseCandles[idx];
-      const snappedX = chart.timeScale().timeToCoordinate(candle.time as any) ?? mx;
+      const snappedX = chart.timeScale().timeToCoordinate(asChartTime(candle.time)) ?? mx;
       setHoverCandleInfo({ x: snappedX, time: candle.time, candle });
     }
   };
@@ -499,26 +496,49 @@ export const TradingChart: React.FC = () => {
     const time = chart.timeScale().coordinateToTime(mx) as number | null;
 
     if (time) {
-      const idx = baseCandles.findIndex((c) => c.time >= time);
-      const chosenIdx = idx !== -1 ? idx : baseCandles.length - 20;
-      lastVisibleRangeRef.current = null;
-      setStartIndex(chosenIdx);
-      setCurrentIndex(chosenIdx);
+      const found = indexAtOrAfter(baseCandles, time);
+      // Clamp: `length - 20` went negative on a series shorter than 20 candles,
+      // and the negative index propagated into the replay cursor.
+      const chosenIdx = found !== -1
+        ? found
+        : Math.max(0, baseCandles.length - 20);
+
+      setStartIndex(chosenIdx, baseCandles.length);
+      setCurrentIndex(chosenIdx, baseCandles.length);
       setIsPicking(false);
       setHoverCandleInfo(null);
       setIsActive(true);
-      showToast('Mode Replay démarré !', 'success');
+      showToast(`Replay démarré au ${new Date(baseCandles[chosenIdx].time * 1000).toLocaleDateString('fr-FR')}`, 'success');
     }
   };
 
   const loadDemo = async () => {
     setIsLoading(true);
-    const candles = await fetchHistoricalData('EURUSD', '1d', 'max');
-    setIsLoading(false);
-    if (candles && candles.length) {
+    try {
+      const series = await fetchHistoricalSeries({ symbol: 'EURUSD', interval: '1d', range: 'max' });
+      if (!series.candles.length) {
+        showToast('Aucune donnée disponible pour la démo.', 'error', 4000);
+        return;
+      }
       setSymbol('EURUSD');
-      setBaseCandles(candles);
-      showToast(`🟢 Démo EUR/USD — ${candles.length.toLocaleString()} bougies chargées`, 'success');
+      setBaseCandles(series.candles);
+      setDataSource(`Données réelles · ${PROVENANCE_LABELS[series.provenance]}`, series.isSimulated);
+
+      const count = series.candles.length.toLocaleString('fr-FR');
+      showToast(
+        series.isSimulated
+          ? `Données simulées : aucune source n’a répondu. Résultats non exploitables.`
+          : `EUR/USD chargé · ${count} bougies · ${PROVENANCE_LABELS[series.provenance]}`,
+        series.isSimulated ? 'warning' : 'success',
+        series.isSimulated ? 7000 : 3000
+      );
+    } catch (error) {
+      console.warn('[TradingChart] demo load failed:', error);
+      showToast('Échec du chargement de la démo.', 'error', 4000);
+    } finally {
+      // `finally` matters: the previous version left the spinner spinning
+      // forever whenever the fetch threw.
+      setIsLoading(false);
     }
   };
 
@@ -532,6 +552,20 @@ export const TradingChart: React.FC = () => {
         ).toLocaleDateString('fr-FR')}`
       : '';
 
+  // `Connecté` was shown as soon as candles were in memory, even offline — it
+  // described a connection that did not exist. State the truth instead.
+  const statusLabel = !displayCandles.length
+    ? 'Aucune donnée'
+    : isSimulatedData
+      ? 'Données simulées'
+      : (dataSourceLabel ?? 'Données chargées');
+
+  const provenanceTitle = isSimulatedData
+    ? 'Série générée localement : aucune source de marché n’a répondu. Résultats non exploitables.'
+    : dataSourceLabel
+      ? `Origine des bougies : ${dataSourceLabel}`
+      : 'Origine des données inconnue';
+
   return (
     <div id="chart-area" ref={containerRef}>
       <div
@@ -542,7 +576,12 @@ export const TradingChart: React.FC = () => {
         style={{ cursor: isPicking ? 'crosshair' : undefined, position: 'relative' }}
       >
         {/* Chart Canvas */}
-        <div id="tv-chart" ref={chartWrapperRef} style={{ width: '100%', height: '100%' }}>
+        {/* Pas de style inline ici : `height: 100%` en ligne bat tout sélecteur,
+            et neutralisait `body.replay-active #tv-chart`. Le graphe ne se
+            rétrécissait donc jamais en replay et les dernières bougies
+            passaient sous la barre de prise de position. La taille appartient
+            à la feuille de style. */}
+        <div id="tv-chart" ref={chartWrapperRef}>
           <DrawingCanvas
             chart={chart}
             mainSeries={mainSeries}
@@ -554,17 +593,7 @@ export const TradingChart: React.FC = () => {
         {/* ── REPLAY VISUAL CUT LINE INDICATOR ── */}
         {isPicking && hoverCandleInfo && (
           <div
-            className="replay-cut-container"
-            style={{
-              position: 'absolute',
-              top: 0,
-              bottom: 0,
-              left: 0,
-              right: 0,
-              pointerEvents: 'none',
-              zIndex: 40,
-              overflow: 'hidden',
-            }}
+            className="replay-cut-container u-position-absolute u-top-0 u-bottom-0 u-left-0 u-right-0 u-pointer-events-none u-z-index-40 u-overflow-hidden"
           >
             {/* Future area shadow on right */}
             <div
@@ -618,11 +647,11 @@ export const TradingChart: React.FC = () => {
                 pointerEvents: 'none',
               }}
             >
-              <span style={{ color: '#38BDF8', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              <span className="u-color-38bdf8 u-display-inline-flex u-align-items-center u-gap-5px">
                 <Scissors size={12} strokeWidth={2.4} />
-                Couper ici :
+                Démarrer ici :
               </span>
-              <span style={{ fontFamily: 'var(--mono)', color: '#38BDF8' }}>
+              <span className="u-font-family-mono u-color-38bdf8">
                 {new Date(hoverCandleInfo.candle.time * 1000).toLocaleString('fr-FR', {
                   day: '2-digit',
                   month: 'short',
@@ -631,8 +660,9 @@ export const TradingChart: React.FC = () => {
                   minute: '2-digit',
                 })}
               </span>
-              <span style={{ color: '#94A3B8', fontSize: '10px' }}>
-                ({hoverCandleInfo.candle.close.toFixed(hoverCandleInfo.candle.close < 10 ? 5 : 2)})
+              <span className="u-color-94a3b8 u-font-size-10px">
+                {/* Precision from the catalogue, not from the price's magnitude. */}
+                ({formatPrice(currentSymbol, hoverCandleInfo.candle.close)})
               </span>
             </div>
           </div>
@@ -641,20 +671,20 @@ export const TradingChart: React.FC = () => {
         {/* Replay Start Hint (Floating Top Glass Banner) */}
         {isPicking && !hoverCandleInfo && (
           <div id="replay-hint">
-            <div className="rh-icon-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="rh-icon-wrap u-display-flex u-align-items-center u-justify-content-center">
               <History size={17} strokeWidth={2.2} />
             </div>
             <div className="rh-content">
-              <div className="rh-text">Mode Replay : Choisissez le point de départ</div>
-              <div className="rh-sub">Survolez le graphique et cliquez sur une bougie pour couper</div>
+              <div className="rh-text">Où commencer ?</div>
+              <div className="rh-sub">Cliquez sur la bougie où démarrer.</div>
             </div>
-            <div className="rh-badge">Échap pour quitter</div>
+            <div className="rh-badge">Échap pour annuler</div>
           </div>
         )}
 
         {/* Loading Spinner */}
         {isLoading && (
-          <div id="loading" style={{ display: 'flex' }}>
+          <div id="loading" className="u-display-flex">
             <div className="spinner" />
           </div>
         )}
@@ -663,42 +693,57 @@ export const TradingChart: React.FC = () => {
         {displayCandles.length === 0 && !isLoading && (
           <div id="welcome-overlay">
             <div className="welcome-content">
-              <div className="welcome-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <TrendingUp size={28} strokeWidth={2.5} style={{ color: '#38BDF8' }} />
+              <div className="welcome-icon u-display-flex u-align-items-center u-justify-content-center">
+                <TrendingUp size={28} strokeWidth={2.5} className="u-color-38bdf8" />
               </div>
-              <div className="welcome-title">Bienvenue sur <span>TradeView Pro</span></div>
+              <div className="welcome-title">Rejouez le marché, <span>bougie par bougie</span></div>
               <div className="welcome-sub">
-                Importez vos données de marché ou connectez les flux en direct pour visualiser les chandeliers, rejouer des sessions et simuler des trades.
+                Choisissez un instrument ou importez vos données pour commencer.
               </div>
-              <div id="drop-zone" onClick={() => openModal('import')}>
-                <div className="drop-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <UploadCloud size={30} strokeWidth={1.8} style={{ color: '#38BDF8' }} />
+              <div
+                id="drop-zone"
+                role="button"
+                tabIndex={0}
+                onClick={() => openModal('import')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openModal('import');
+                  }
+                }}
+              >
+                <div className="drop-icon u-display-flex u-align-items-center u-justify-content-center">
+                  <UploadCloud size={30} strokeWidth={1.8} className="u-color-38bdf8" />
                 </div>
-                <div className="drop-text">Glissez un fichier ou cliquez pour parcourir</div>
-                <div className="drop-hint">Colonnes recommandées : date, open, high, low, close, volume</div>
+                <div className="drop-text">Déposez un CSV ou un JSON, ou parcourez</div>
+                <div className="drop-hint">Colonnes attendues : date, open, high, low, close, volume</div>
                 <div className="drop-formats">
                   <span className="fmt-badge">CSV</span>
                   <span className="fmt-badge">JSON</span>
                 </div>
               </div>
               <button id="load-sample" onClick={loadDemo}>
-                Charger les données de démonstration (27 Ans BCE)
+                Essayer avec EUR/USD
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Statusbar */}
+      {/* Statusbar — provenance first: "are these candles real?" is a standing
+          question during a backtest, not a three-second toast. */}
       <div id="statusbar">
-        <div className="status-item">
-          <div className="status-dot online" id="status-dot" />
-          <span id="status-text">{displayCandles.length > 0 ? 'Connecté' : 'Prêt'}</span>
+        <div className="status-item" title={provenanceTitle}>
+          <div
+            className={`status-dot ${isSimulatedData ? 'simulated' : 'online'}`}
+            id="status-dot"
+          />
+          <span id="status-text">{statusLabel}</span>
         </div>
         {displayCandles.length > 0 && (
           <>
             <div className="status-item" id="status-rows">
-              <span>Bougies : <strong id="rows-count">{displayCandles.length.toLocaleString()}</strong></span>
+              <span><strong id="rows-count">{displayCandles.length.toLocaleString('fr-FR')}</strong> bougies</span>
             </div>
             <div className="status-item" id="status-range">
               <span id="range-text">{dateRangeStr}</span>
@@ -706,11 +751,11 @@ export const TradingChart: React.FC = () => {
           </>
         )}
         {isReplayActive && (
-          <div className="status-item" id="status-replay" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span className="status-replay-icon" style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <div className="status-item u-display-flex u-align-items-center u-gap-6px" id="status-replay">
+            <span className="status-replay-icon u-display-inline-flex u-align-items-center">
               <Play size={11} strokeWidth={2.4} fill="currentColor" />
             </span>
-            <span id="replay-status-text">Mode Replay</span>
+            <span id="replay-status-text">Replay en cours</span>
           </div>
         )}
       </div>

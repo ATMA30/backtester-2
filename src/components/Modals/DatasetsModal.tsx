@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
 import {
   Database,
   X,
@@ -13,6 +14,8 @@ import {
 } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore } from '../../store/useMarketStore';
+import { parseBacktestSession } from '../../domain/session';
+import { newId } from '../../utils/id';
 import { useDrawingStore } from '../../store/useDrawingStore';
 import { useTradeStore } from '../../store/useTradeStore';
 import { useReplayStore } from '../../store/useReplayStore';
@@ -24,6 +27,9 @@ import {
   deleteBacktestSession,
 } from '../../services/db';
 import { DatasetMeta, BacktestSession } from '../../types/market';
+
+/** Plafond d'un fichier de session importé. */
+const MAX_SESSION_BYTES = 50 * 1024 * 1024;
 
 export const DatasetsModal: React.FC = () => {
   const { activeModal, closeModal, openModal, showToast } = useUIStore();
@@ -67,6 +73,9 @@ export const DatasetsModal: React.FC = () => {
     getAllDatasets().then(setDatasets);
   }, [activeModal]);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, activeModal === 'datasets');
+
   if (activeModal !== 'datasets') return null;
 
   // ── SAUVEGARDER LA SESSION ACTUELLE ─────────────────────────
@@ -76,7 +85,7 @@ export const DatasetsModal: React.FC = () => {
     const metrics = getMetrics();
 
     const newSession: BacktestSession = {
-      id: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: newId('sess'),
       name,
       symbol: currentSymbol,
       baseTF,
@@ -104,7 +113,16 @@ export const DatasetsModal: React.FC = () => {
       data: baseCandles,
     };
 
-    await saveBacktestSession(newSession);
+    // Sessions embed the full candle series and routinely weigh several
+    // megabytes, so `QuotaExceededError` is a realistic outcome. The result was
+    // discarded here — unlike in `handleImportJson` — and the user was told the
+    // save had succeeded while nothing had been written.
+    const write = await saveBacktestSession(newSession);
+    if (!write.ok) {
+      showToast(`Sauvegarde impossible : ${write.message}`, 'error', 6000);
+      return;
+    }
+
     setSessions((prev) => [newSession, ...prev]);
     setIsCreatingSession(false);
     setSessionNameInput('');
@@ -112,7 +130,14 @@ export const DatasetsModal: React.FC = () => {
   };
 
   // ── CHARGER UNE SESSION COMPLÈTE ────────────────────────────
-  const handleLoadSession = (session: BacktestSession) => {
+  const handleLoadSession = (rawSession: BacktestSession) => {
+    const parsed = parseBacktestSession(rawSession);
+    if (!parsed) {
+      showToast('Session illisible : données corrompues.', 'error', 4000);
+      return;
+    }
+    const session = parsed.session;
+
     // 1. Restaurer les bougies de marché
     if (session.data && session.data.length > 0) {
       setSymbol(session.symbol);
@@ -126,7 +151,9 @@ export const DatasetsModal: React.FC = () => {
     // 2. Restaurer le Replay
     if (session.replayActive) {
       setReplayActive(true);
-      setReplayCurrentIndex(session.replayIndex || 0);
+      // Clamp against the series that was actually restored: a saved index from
+      // a longer dataset would otherwise point past the end.
+      setReplayCurrentIndex(session.replayIndex || 0, session.data?.length);
     } else {
       setReplayActive(false);
     }
@@ -143,7 +170,7 @@ export const DatasetsModal: React.FC = () => {
       closedPositions: session.closedPositions || [],
       activePosition: session.activePosition || null,
       pendingOrders: session.pendingOrders || [],
-    });
+    }, session.symbol);
 
     triggerFitContent();
     closeModal();
@@ -175,22 +202,51 @@ export const DatasetsModal: React.FC = () => {
   const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Une session embarque au plus 200 000 bougies (~30 Mo de JSON) : au-delà,
+    // `readAsText` puis `JSON.parse` matérialisent le fichier deux fois.
+    if (file.size > MAX_SESSION_BYTES) {
+      showToast(
+        `${file.name} fait ${Math.round(file.size / 1_048_576)} Mo : une session dépasse rarement 50 Mo. Ce n’est probablement pas un fichier de session.`,
+        'error',
+        6000
+      );
+      e.target.value = '';
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const parsed = JSON.parse(ev.target?.result as string) as BacktestSession;
-        if (!parsed.symbol || typeof parsed.balance !== 'number') {
-          showToast('Fichier session JSON invalide', 'error');
+        // Session files travel between users, so the payload is untrusted:
+        // validate every field before it reaches IndexedDB and the stores.
+        const result = parseBacktestSession(JSON.parse(ev.target?.result as string));
+        if (!result) {
+          showToast('Fichier session JSON invalide', 'error', 4000);
           return;
         }
-        parsed.id = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        parsed.updatedAt = Date.now();
-        await saveBacktestSession(parsed);
-        setSessions((prev) => [parsed, ...prev]);
-        showToast(`Session "${parsed.name}" importée avec succès !`, 'success', 3500);
+
+        const session: BacktestSession = {
+          ...result.session,
+          id: newId('sess'),
+          updatedAt: Date.now(),
+        };
+
+        const write = await saveBacktestSession(session);
+        if (!write.ok) {
+          showToast(`Import impossible : ${write.message}`, 'error', 6000);
+          return;
+        }
+
+        setSessions((prev) => [session, ...prev]);
+        showToast(
+          result.warnings.length > 0
+            ? `Session "${session.name}" importée — ${result.warnings.join(', ')}.`
+            : `Session "${session.name}" importée avec succès !`,
+          result.warnings.length > 0 ? 'warning' : 'success',
+          result.warnings.length > 0 ? 6000 : 3500
+        );
       } catch {
-        showToast("Erreur lors de l'import de la session", 'error');
+        showToast("Erreur lors de l'import de la session", 'error', 4000);
       }
     };
     reader.readAsText(file);
@@ -224,183 +280,140 @@ export const DatasetsModal: React.FC = () => {
   return (
     <div
       id="datasets-modal"
-      className="custom-modal open"
-      style={{ display: 'flex', opacity: 1 }}
+      className="custom-modal open u-display-flex u-opacity-1"
       onClick={(e) => {
         if (e.target === e.currentTarget) closeModal();
       }}
     >
-      <div className="custom-modal-box" style={{ maxWidth: '720px', width: '95%' }}>
+      <div className="custom-modal-box u-max-width-720px u-width-95pct" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Données et sessions">
         {/* Header */}
-        <div className="custom-modal-header" style={{ borderBottom: '1px solid var(--border)' }}>
-          <div className="custom-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Database size={16} strokeWidth={2} style={{ color: '#38BDF8' }} />
-            <span>Gestionnaire de Sessions &amp; Datasets</span>
+        <div className="custom-modal-header u-border-bottom-1px-solid-border">
+          <div className="custom-modal-title u-display-flex u-align-items-center u-gap-8px">
+            <Database size={16} strokeWidth={2} className="u-color-38bdf8" />
+            <span>Sauvegardes et jeux de données</span>
           </div>
           <button
-            className="custom-modal-close"
+            className="custom-modal-close u-display-flex u-align-items-center u-justify-content-center"
             onClick={closeModal}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           >
             <X size={15} strokeWidth={2.4} />
           </button>
         </div>
 
         {/* Tab Navigation */}
-        <div
-          style={{
-            display: 'flex',
-            gap: '8px',
-            padding: '10px 16px 0 16px',
-            background: 'var(--bg-card)',
-            borderBottom: '1px solid var(--border)',
-          }}
+        <div className="u-padding-12px-16px u-border-bottom-1px-solid-border"
         >
-          <button
-            onClick={() => setActiveTab('sessions')}
-            style={{
-              padding: '8px 14px',
-              borderBottom: activeTab === 'sessions' ? '2px solid var(--accent)' : '2px solid transparent',
-              background: 'transparent',
-              color: activeTab === 'sessions' ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontWeight: activeTab === 'sessions' ? 600 : 400,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '13px',
-            }}
-          >
-            <Layers size={14} />
-            <span>Sessions de Backtest ({sessions.length})</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('datasets')}
-            style={{
-              padding: '8px 14px',
-              borderBottom: activeTab === 'datasets' ? '2px solid var(--accent)' : '2px solid transparent',
-              background: 'transparent',
-              color: activeTab === 'datasets' ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontWeight: activeTab === 'datasets' ? 600 : 400,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '13px',
-            }}
-          >
-            <Database size={14} />
-            <span>Données Brutes ({datasets.length})</span>
-          </button>
+          <div className="seg-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'sessions'}
+              className={`seg-tab ${activeTab === 'sessions' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('sessions')}
+            >
+              <Layers size={13} />
+              <span>Sessions sauvegardées</span>
+              <span className="seg-tab-count">{sessions.length}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'datasets'}
+              className={`seg-tab ${activeTab === 'datasets' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('datasets')}
+            >
+              <Database size={13} />
+              <span>Jeux de bougies</span>
+              <span className="seg-tab-count">{datasets.length}</span>
+            </button>
+          </div>
         </div>
 
         {/* Body Content */}
-        <div className="custom-modal-body" style={{ padding: '16px' }}>
+        <div className="custom-modal-body u-padding-16px">
           {activeTab === 'sessions' ? (
             <div>
               {/* Top Action Bar */}
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '14px',
-                  gap: '10px',
-                  flexWrap: 'wrap',
-                }}
-              >
+              <div className="modal-toolbar">
                 {!isCreatingSession ? (
-                  <button
-                    className="btn-sm btn-primary"
-                    onClick={() => setIsCreatingSession(true)}
-                    style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                  >
-                    <Save size={14} strokeWidth={2} />
-                    <span>Sauvegarder l'état actuel</span>
-                  </button>
+                  // Quand la liste est vide, l'action principale vit dans
+                  // l'état vide : la répéter ici ferait deux fois le même
+                  // appel à l'action dans un écran qui n'a rien à montrer.
+                  sessions.length > 0 && (
+                    <button
+                      className="btn-sm btn-primary u-display-flex u-align-items-center u-gap-6px"
+                      onClick={() => setIsCreatingSession(true)}
+                    >
+                      <Save size={14} strokeWidth={2} />
+                      <span>Enregistrer la session</span>
+                    </button>
+                  )
                 ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                  <div className="u-display-flex u-align-items-center u-gap-8px u-flex-1">
                     <input
                       type="text"
-                      className="form-input"
+                      className="form-input u-font-size-12px u-padding-6px-10px u-flex-1"
                       value={sessionNameInput}
                       onChange={(e) => setSessionNameInput(e.target.value)}
-                      placeholder={`Nom (ex: ${currentSymbol} SMC Scalping)...`}
+                      placeholder={`Nommez cette session — ex. ${currentSymbol} scalping Londres`}
                       autoFocus
-                      style={{ fontSize: '12px', padding: '6px 10px', flex: 1 }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') handleSaveCurrentSession();
                         if (e.key === 'Escape') setIsCreatingSession(false);
                       }}
                     />
                     <button
-                      className="btn-sm btn-primary"
+                      className="btn-sm btn-primary u-display-flex u-align-items-center u-gap-4px"
                       onClick={handleSaveCurrentSession}
-                      style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
                       <CheckCircle2 size={13} />
-                      <span>Valider</span>
+                      <span>Enregistrer</span>
                     </button>
                     <button
-                      className="btn-sm"
+                      className="btn-sm u-padding-6px-8px"
                       onClick={() => setIsCreatingSession(false)}
-                      style={{ padding: '6px 8px' }}
                     >
                       Annuler
                     </button>
                   </div>
                 )}
 
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div className="u-display-flex u-gap-8px">
                   <input
                     type="file"
                     ref={fileInputRef}
-                    accept=".json"
-                    style={{ display: 'none' }}
+                    accept=".json" className="u-display-none"
                     onChange={handleImportJson}
                   />
                   <button
-                    className="btn-sm"
+                    className="btn-sm btn-ghost u-display-flex u-align-items-center u-gap-6px"
                     onClick={() => fileInputRef.current?.click()}
-                    title="Importer une session JSON sauvegardée"
-                    style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                    title="Importer une sauvegarde"
                   >
                     <FileJson size={13} />
-                    <span>Importer JSON</span>
+                    <span>Importer</span>
                   </button>
                 </div>
               </div>
 
               {/* Sessions List */}
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '10px',
-                  maxHeight: '44vh',
-                  overflowY: 'auto',
-                  paddingRight: '4px',
-                }}
+              <div className="u-display-flex u-flex-direction-column u-gap-10px u-max-height-44vh u-overflow-y-auto u-padding-right-4px"
               >
                 {sessions.length === 0 ? (
-                  <div
-                    style={{
-                      textAlign: 'center',
-                      padding: '30px 20px',
-                      color: 'var(--text-secondary)',
-                      fontSize: '13px',
-                      background: 'var(--bg-elevated)',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px dashed var(--border)',
-                    }}
-                  >
-                    <Layers size={32} strokeWidth={1.5} style={{ opacity: 0.5, marginBottom: '8px' }} />
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                      Aucune session de backtest enregistrée
-                    </div>
-                    <div style={{ fontSize: '11px', maxWidth: '400px', margin: '0 auto' }}>
-                      Cliquez sur <strong>"Sauvegarder l'état actuel"</strong> pour immortaliser votre solde, votre journal de trades, vos positions en cours, vos tracés graphiques et votre position de replay.
-                    </div>
+                  <div className="modal-empty">
+                    <Layers size={30} strokeWidth={1.5} className="modal-empty-icon" aria-hidden />
+                    <div className="modal-empty-title">Aucune session enregistrée</div>
+                    <p className="modal-empty-text">
+                      Sauvegardez l’état de votre graphique, vos indicateurs et vos positions en
+                      cours pour les retrouver plus tard.
+                    </p>
+                    <button
+                      className="btn-sm btn-primary u-display-flex u-align-items-center u-gap-6px"
+                      onClick={() => setIsCreatingSession(true)}
+                    >
+                      <Save size={13} strokeWidth={2} />
+                      <span>Enregistrer maintenant</span>
+                    </button>
                   </div>
                 ) : (
                   sessions.map((s) => {
@@ -411,71 +424,48 @@ export const DatasetsModal: React.FC = () => {
 
                     return (
                       <div
-                        key={s.id}
-                        style={{
-                          background: 'var(--bg-elevated)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 'var(--radius-sm)',
-                          padding: '12px 14px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '8px',
-                          transition: 'border-color 0.2s',
-                        }}
+                        key={s.id} className="u-background-bg-elevated u-border-1px-solid-border u-border-radius-radius-sm u-padding-12px-14px u-display-flex u-flex-direction-column u-gap-8px u-transition-border-color-0_2s"
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div className="u-display-flex u-justify-content-space-between u-align-items-flex-start">
                           <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>{s.name}</strong>
-                              <span className="badge-type long" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                            <div className="u-display-flex u-align-items-center u-gap-8px">
+                              <strong className="u-font-size-14px u-color-text-primary">{s.name}</strong>
+                              <span className="badge-type long u-font-size-10px u-padding-2px-6px">
                                 {s.symbol}
                               </span>
                               {s.replayActive && (
-                                <span
-                                  style={{
-                                    fontSize: '10px',
-                                    color: 'var(--gold)',
-                                    background: 'rgba(234, 179, 8, 0.1)',
-                                    padding: '2px 6px',
-                                    borderRadius: '4px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '3px',
-                                  }}
+                                <span className="u-font-size-10px u-color-gold u-background-rgba-234-179-8-0_1 u-padding-2px-6px u-border-radius-4px u-display-flex u-align-items-center u-gap-3px"
                                 >
                                   <Play size={9} fill="currentColor" /> Replay #{s.replayIndex}
                                 </span>
                               )}
                             </div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            <div className="u-font-size-11px u-color-text-secondary u-margin-top-2px">
                               Sauvegardé le {new Date(s.updatedAt || s.createdAt).toLocaleDateString('fr-FR')} à {new Date(s.updatedAt || s.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
                             </div>
                           </div>
 
                           {/* Quick Actions */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div className="u-display-flex u-align-items-center u-gap-6px">
                             <button
-                              className="btn-sm btn-primary"
+                              className="btn-sm btn-primary u-display-flex u-align-items-center u-gap-4px u-padding-4px-10px"
                               onClick={() => handleLoadSession(s)}
-                              title="Restaurer entièrement ce backtest"
-                              style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px' }}
+                              title="Reprendre ce backtest"
                             >
                               <Play size={11} fill="currentColor" />
-                              <span>Charger</span>
+                              <span>Reprendre</span>
                             </button>
                             <button
-                              className="tv-icon-btn"
+                              className="tv-icon-btn u-width-28px u-height-28px"
                               onClick={(e) => handleExportSession(e, s)}
-                              title="Télécharger la session (JSON)"
-                              style={{ width: '28px', height: '28px' }}
+                              title="Exporter cette sauvegarde"
                             >
                               <Download size={13} />
                             </button>
                             <button
-                              className="tv-icon-btn danger"
+                              className="tv-icon-btn danger u-width-28px u-height-28px u-color-red"
                               onClick={(e) => handleDeleteSession(e, s.id, s.name)}
-                              title="Supprimer cette session"
-                              style={{ width: '28px', height: '28px', color: 'var(--red)' }}
+                              title="Supprimer cette sauvegarde"
                             >
                               <Trash2 size={13} />
                             </button>
@@ -483,23 +473,14 @@ export const DatasetsModal: React.FC = () => {
                         </div>
 
                         {/* Session Metrics Bar */}
-                        <div
-                          style={{
-                            display: 'flex',
-                            gap: '16px',
-                            background: 'var(--bg-card)',
-                            padding: '6px 10px',
-                            borderRadius: '4px',
-                            fontSize: '11px',
-                            flexWrap: 'wrap',
-                          }}
+                        <div className="u-display-flex u-gap-16px u-background-bg-card u-padding-6px-10px u-border-radius-4px u-font-size-11px u-flex-wrap-wrap"
                         >
                           <div>
-                            <span style={{ color: 'var(--text-secondary)' }}>Solde: </span>
-                            <strong style={{ fontFamily: 'var(--mono)' }}>${s.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                            <span className="u-color-text-secondary">Solde </span>
+                            <strong className="u-font-family-mono">${s.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                           </div>
                           <div>
-                            <span style={{ color: 'var(--text-secondary)' }}>P&amp;L: </span>
+                            <span className="u-color-text-secondary">Résultat </span>
                             <strong
                               style={{
                                 color: isProfitable ? 'var(--green)' : 'var(--red)',
@@ -510,18 +491,18 @@ export const DatasetsModal: React.FC = () => {
                             </strong>
                           </div>
                           <div>
-                            <span style={{ color: 'var(--text-secondary)' }}>Trades: </span>
-                            <strong style={{ fontFamily: 'var(--mono)' }}>{tradeCount}</strong>
+                            <span className="u-color-text-secondary">Trades </span>
+                            <strong className="u-font-family-mono">{tradeCount}</strong>
                           </div>
                           {s.winRate !== undefined && tradeCount > 0 && (
                             <div>
-                              <span style={{ color: 'var(--text-secondary)' }}>Win Rate: </span>
-                              <strong style={{ color: 'var(--gold)', fontFamily: 'var(--mono)' }}>{s.winRate.toFixed(1)}%</strong>
+                              <span className="u-color-text-secondary">Réussite </span>
+                              <strong className="u-color-gold u-font-family-mono">{s.winRate.toFixed(1)}%</strong>
                             </div>
                           )}
                           <div>
-                            <span style={{ color: 'var(--text-secondary)' }}>Dessins: </span>
-                            <strong style={{ fontFamily: 'var(--mono)' }}>{drawingsCount}</strong>
+                            <span className="u-color-text-secondary">Tracés </span>
+                            <strong className="u-font-family-mono">{drawingsCount}</strong>
                           </div>
                         </div>
                       </div>
@@ -532,28 +513,42 @@ export const DatasetsModal: React.FC = () => {
             </div>
           ) : (
             /* Datasets Tab */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+            <div className="u-display-flex u-flex-direction-column u-gap-10px">
+              <div className="u-display-flex u-justify-content-space-between u-align-items-center u-margin-bottom-6px">
+                <span className="u-font-size-12px u-color-text-secondary">
                   Données de chandeliers brutes stockées en cache local IndexedDB.
                 </span>
                 <button
-                  className="btn-sm btn-primary"
+                  className="btn-sm btn-primary u-display-flex u-align-items-center u-gap-6px"
                   onClick={() => {
                     closeModal();
                     openModal('import');
                   }}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   <UploadCloud size={13} />
-                  <span>Importer CSV</span>
+                  <span>Importer un fichier</span>
                 </button>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '42vh', overflowY: 'auto' }}>
+              <div className="u-display-flex u-flex-direction-column u-gap-8px u-max-height-42vh u-overflow-y-auto">
                 {datasets.length === 0 ? (
-                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', padding: '16px', textAlign: 'center' }}>
-                    Aucun dataset brut en cache.
+                  <div className="modal-empty">
+                    <Database size={30} strokeWidth={1.5} className="modal-empty-icon" aria-hidden />
+                    <div className="modal-empty-title">Aucun jeu de bougies</div>
+                    <p className="modal-empty-text">
+                      Importez un fichier CSV ou JSON pour conserver ses bougies en cache et les
+                      recharger sans réseau.
+                    </p>
+                    <button
+                      className="btn-sm btn-primary u-display-flex u-align-items-center u-gap-6px"
+                      onClick={() => {
+                        closeModal();
+                        openModal('import');
+                      }}
+                    >
+                      <UploadCloud size={13} strokeWidth={2} />
+                      <span>Importer un fichier</span>
+                    </button>
                   </div>
                 ) : (
                   datasets.map((d) => {
@@ -575,19 +570,18 @@ export const DatasetsModal: React.FC = () => {
                         }}
                       >
                         <div>
-                          <strong style={{ fontSize: '13px', fontFamily: 'var(--mono)' }}>{d.symbol}</strong>
-                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                          <strong className="u-font-size-13px u-font-family-mono">{d.symbol}</strong>
+                          <div className="u-font-size-11px u-color-text-secondary">
                             {d.candlesCount.toLocaleString()} bougies • {d.timeRange || 'Historique'}
                           </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div className="u-display-flex u-align-items-center u-gap-8px">
                           <span className={`badge-type ${isActive ? 'long' : ''}`}>{isActive ? 'Actif' : 'En cache'}</span>
                           {!isActive && (
                             <button
-                              className="btn-sm btn-danger"
+                              className="btn-sm btn-danger u-display-flex u-align-items-center u-gap-4px u-padding-4px-8px"
                               onClick={(e) => handleDeleteDataset(e, d.symbol)}
-                              title="Supprimer ce dataset"
-                              style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px' }}
+                              title="Supprimer ce jeu de données"
                             >
                               <Trash2 size={12} strokeWidth={2} />
                               <span>Supprimer</span>
@@ -604,11 +598,6 @@ export const DatasetsModal: React.FC = () => {
         </div>
 
         {/* Modal Footer */}
-        <div className="custom-modal-actions" style={{ borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
-          <button className="btn-sm" onClick={closeModal}>
-            Fermer
-          </button>
-        </div>
       </div>
     </div>
   );

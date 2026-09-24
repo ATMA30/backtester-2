@@ -1,384 +1,484 @@
-import React, { useState, useRef } from 'react';
-import { UploadCloud, X, FileSpreadsheet } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
+import { UploadCloud, X, FileSpreadsheet, Loader2, AlertTriangle } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore, detectBaseTF } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { Candle } from '../../types/market';
+import { sanitizeCandles, RawCandleLike } from '../../domain/candles';
+import {
+  ColumnRole,
+  CsvTable,
+  DateOrder,
+  detectDateOrder,
+  hasSlashDates,
+  inferColumnMapping,
+  parseCsv,
+  parseNumber,
+  parseTimestamp,
+} from '../../domain/csv';
+import { RejectedSample, streamCsvCandles } from '../../domain/csv-stream';
+import { TIMEFRAME_DEFS } from '../../domain/timeframes';
 
-function parseTimestamp(val: any): number | null {
-  if (val === undefined || val === null) return null;
-  const s = String(val).trim().replace(/['"<>]/g, '');
-  if (!s) return null;
+/** Libellé de la zone de dépôt tant qu'aucun fichier n'est choisi. */
+const DEFAULT_DROP_LABEL = 'Glissez un fichier CSV ou JSON';
 
-  // Numeric timestamp (seconds or milliseconds, integer or float)
-  const numVal = parseFloat(s);
-  if (!isNaN(numVal) && String(numVal).length >= 9) {
-    if (numVal > 900000000 && numVal < 2500000000) {
-      return Math.floor(numVal);
+/**
+ * Les CSV sont toujours lus en flux, donc la limite ne protège plus que d'un
+ * fichier manifestement hors sujet. Un historique 1 minute sur vingt ans pèse
+ * ~325 Mo : c'est un jeu de données légitime pour un backtester.
+ */
+const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * Le JSON n'a pas de lecteur en flux : `file.text()` puis `JSON.parse`
+ * matérialisent tout le fichier, deux fois. Au-delà de ~100 Mo l'onglet tombe ;
+ * le CSV, lu en flux, est la voie pour les gros historiques.
+ */
+const MAX_JSON_BYTES = 100 * 1024 * 1024;
+
+/** Octets lus pour l'aperçu : assez pour ~2 000 lignes, jamais tout le fichier. */
+const PREVIEW_BYTES = 256 * 1024;
+const PREVIEW_ROWS = 5;
+
+/**
+ * Bougies gardées en mémoire au maximum.
+ *
+ * Mesuré dans Chrome : 2 000 000 bougies occupent ~2,1 Go de tas pour une
+ * limite moteur de ~4,2 Go, et 6,6 millions font tomber l'onglet. 1,2 million
+ * laisse une marge confortable au graphique, aux indicateurs et au replay.
+ * Au-delà, la période complète est conservée : c'est la résolution qui baisse.
+ */
+const MAX_STREAMED_CANDLES = 1_200_000;
+const MAX_FILES = 20;
+
+const ROLES: readonly ColumnRole[] = ['date', 'time', 'open', 'high', 'low', 'close', 'volume'];
+const ROLE_LABELS: Record<ColumnRole, string> = {
+  date: 'Date',
+  time: 'Heure',
+  open: 'Ouverture',
+  high: 'Plus haut',
+  low: 'Plus bas',
+  close: 'Clôture',
+  volume: 'Volume',
+};
+
+const DATE_FORMATS_HINT = 'AAAA-MM-JJ, JJ/MM/AAAA, MM/JJ/AAAA ou horodatage Unix';
+
+type Mapping = Record<ColumnRole, string>;
+
+interface Preview {
+  readonly table: CsvTable;
+  readonly slashDates: boolean;
+  /** Ordre prouvé par l'échantillon, ou `null` s'il reste ambigu. */
+  readonly detectedOrder: DateOrder | null;
+}
+
+/** Libellé lisible d'une résolution, ex. 3600 → « 1h ». */
+function labelForSeconds(seconds: number): string {
+  return TIMEFRAME_DEFS.find((d) => d.s === seconds)?.label ?? `${Math.round(seconds / 60)} min`;
+}
+
+function formatBytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(0)} Mo`;
+}
+
+function isJson(file: File): boolean {
+  return file.name.toLowerCase().endsWith('.json');
+}
+
+function suggestSymbol(file: File): string {
+  return file.name
+    .replace(/\.[^/.]+$/, '')
+    .replace(/_(FULL|MT4|MT5|H1|H4|D1|M30|M15|M5|M1|DATA)(?=_|$)/gi, '')
+    .toUpperCase()
+    .slice(0, 16);
+}
+
+/** Reject oversized input before reading it into memory. */
+function screenFiles(files: File[]): { accepted: File[]; rejected: string[] } {
+  const accepted: File[] = [];
+  const rejected: string[] = [];
+
+  for (const file of files.slice(0, MAX_FILES)) {
+    const limit = isJson(file) ? MAX_JSON_BYTES : MAX_FILE_BYTES;
+    if (file.size > limit) {
+      rejected.push(
+        isJson(file)
+          ? `${file.name} (${formatBytes(file.size)} : un JSON se lit d’un bloc, limite ${formatBytes(limit)} — exportez-le en CSV)`
+          : `${file.name} (${formatBytes(file.size)} > ${formatBytes(limit)})`
+      );
+    } else {
+      accepted.push(file);
     }
-    if (numVal >= 900000000000 && numVal < 2500000000000) {
-      return Math.floor(numVal / 1000);
-    }
   }
-
-  // Replace dots and slashes: "2023.01.15" or "2023/01/15" -> "2023-01-15"
-  let isoStr = s.replace(/\./g, '-');
-
-  // Handle DD/MM/YYYY or DD-MM-YYYY format
-  const dmyMatch = isoStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(.*)$/);
-  if (dmyMatch) {
-    const day = dmyMatch[1].padStart(2, '0');
-    const month = dmyMatch[2].padStart(2, '0');
-    const year = dmyMatch[3];
-    const rest = dmyMatch[4] || '';
-    isoStr = `${year}-${month}-${day}${rest}`;
+  if (files.length > MAX_FILES) {
+    rejected.push(`${files.length - MAX_FILES} fichier(s) au-delà de la limite de ${MAX_FILES}`);
   }
-
-  // Handle space separator between date and time: "2023-01-15 14:00:00" -> "2023-01-15T14:00:00Z"
-  if (isoStr.includes(' ')) {
-    isoStr = isoStr.replace(' ', 'T');
-    if (!isoStr.endsWith('Z')) isoStr += 'Z';
-  } else if (/^\d{4}-\d{2}-\d{2}$/.test(isoStr)) {
-    isoStr += 'T00:00:00Z';
-  }
-
-  const d = new Date(isoStr);
-  if (!isNaN(d.getTime())) return Math.floor(d.getTime() / 1000);
-
-  const f = new Date(s);
-  if (!isNaN(f.getTime())) return Math.floor(f.getTime() / 1000);
-
-  // Compact YYYYMMDD format
-  if (/^\d{8}$/.test(s)) {
-    const d2 = new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T00:00:00Z`);
-    if (!isNaN(d2.getTime())) return Math.floor(d2.getTime() / 1000);
-  }
-
-  return null;
+  return { accepted, rejected };
 }
 
-function parseNumber(val: any): number {
-  if (val === undefined || val === null) return NaN;
-  const str = String(val).trim().replace(/['"<>]/g, '').replace(',', '.');
-  return parseFloat(str);
+/** Lit le début du fichier, sans la dernière ligne si elle est coupée. */
+async function readHead(file: File): Promise<string> {
+  const text = await file.slice(0, PREVIEW_BYTES).text();
+  if (file.size <= PREVIEW_BYTES) return text;
+  const lastBreak = text.lastIndexOf('\n');
+  return lastBreak > 0 ? text.slice(0, lastBreak) : text;
 }
 
-function cleanHeaderName(header: string): string {
-  return header.toLowerCase().replace(/[^a-z0-9_]/g, '');
+async function readJsonRows(file: File): Promise<RawCandleLike[]> {
+  const parsed: unknown = JSON.parse(await file.text());
+  const list = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object'
+      ? ((parsed as Record<string, unknown>).candles ?? (parsed as Record<string, unknown>).data)
+      : null;
+  if (!Array.isArray(list)) return [];
+
+  return list.map((entry) => {
+    const row = (entry ?? {}) as Record<string, unknown>;
+    return {
+      time: parseTimestamp(row.time ?? row.date ?? row.timestamp),
+      open: parseNumber(row.open ?? row.o),
+      high: parseNumber(row.high ?? row.h),
+      low: parseNumber(row.low ?? row.l),
+      close: parseNumber(row.close ?? row.c),
+      // `|| 0`, not `|| 100`: a genuine zero volume is data, not a gap to paper
+      // over with an invented figure.
+      volume: parseNumber(row.volume ?? row.vol ?? row.v) || 0,
+    };
+  });
 }
 
-function autoMatchColumn(header: string, field: string): boolean {
-  const h = cleanHeaderName(header);
-  const maps: Record<string, string[]> = {
-    date: ['date', 'timestamp', 'datetime', 'dt', 'time', 'open_time', 'opentime', 'close_time', 'ts', 'time_utc', 'gmt_time'],
-    time: ['time', 'heure', 'hour', 'timestamp_time'],
-    open: ['open', 'o', 'open_price', 'ouv', 'ouverture', 'openprice', 'first'],
-    high: ['high', 'h', 'max', 'high_price', 'haut', 'maximum', 'highprice'],
-    low: ['low', 'l', 'min', 'low_price', 'bas', 'minimum', 'lowprice'],
-    close: ['close', 'c', 'last', 'price', 'close_price', 'clot', 'cloture', 'closeprice'],
-    volume: ['volume', 'vol', 'v', 'qty', 'tickvol', 'tick_volume', 'volum', 'quantite'],
-  };
-  return (maps[field] || []).some((k) => h === k || h.startsWith(k) || h.endsWith(k));
+/** Une ligne rejetée, dite en clair avec la suite à donner. */
+function describeRejection(sample: RejectedSample): string {
+  const excerpt = sample.text.length > 60 ? `${sample.text.slice(0, 60)}…` : sample.text;
+  return sample.reason === 'date'
+    ? `ligne ${sample.line}, date illisible (« ${excerpt} »). Formats acceptés : ${DATE_FORMATS_HINT}.`
+    : `ligne ${sample.line}, clôture illisible (« ${excerpt} »). Vérifiez la colonne Clôture et le séparateur décimal.`;
 }
 
 export const ImportModal: React.FC = () => {
   const { activeModal, closeModal, showToast } = useUIStore();
-  const { setBaseCandles, setSymbol, setTimeframe, triggerFitContent } = useMarketStore();
+  const { setBaseCandles, setSymbol, setTimeframe, triggerFitContent, setDataSource } = useMarketStore();
 
   const [symbolInput, setSymbolInput] = useState('');
-  const [fileName, setFileName] = useState('Glissez un fichier CSV ou JSON');
-  const [columns, setColumns] = useState<string[]>([]);
-  const [rawRows, setRawRows] = useState<any[]>([]);
-  const [colMapping, setColMapping] = useState({
-    date: '',
-    time: '',
-    open: '',
-    high: '',
-    low: '',
-    close: '',
-    volume: '',
-  });
+  const [files, setFiles] = useState<File[]>([]);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [mapping, setMapping] = useState<Mapping | null>(null);
+  const [dateOrder, setDateOrder] = useState<DateOrder>('DMY');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamProgress, setStreamProgress] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // `App` ne monte cette modale que tant qu'elle est ouverte : la fermer la
+  // démonte, et fermer pendant une lecture l'annule. Avant, l'import se
+  // poursuivait et remplaçait le graphique plus tard, sans prévenir.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, activeModal === 'import');
 
   if (activeModal !== 'import') return null;
 
-  const handleFiles = async (files: File[]) => {
-    if (!files || files.length === 0) return;
-    if (files.length === 1) {
-      handleFile(files[0]);
-      return;
-    }
+  const dropLabel =
+    files.length === 0
+      ? DEFAULT_DROP_LABEL
+      : files.length === 1
+        ? files[0].name
+        : `${files.length} fichiers : ${files.map((f) => f.name).slice(0, 2).join(', ')}${files.length > 2 ? '…' : ''}`;
 
-    const firstFile = files[0];
-    const suggestedSymbol = firstFile.name.replace(/\.[^/.]+$/, '').replace(/_FULL|_H1|_D1|_M15|_M5|_M1/gi, '').toUpperCase().slice(0, 16);
-    const sym = symbolInput || suggestedSymbol;
-    setFileName(`${files.length} fichiers : ${files.map((f) => f.name).slice(0, 2).join(', ')}...`);
-    if (!symbolInput) setSymbolInput(sym);
+  /** Remplace le jeu de données courant. Point de sortie unique des imports. */
+  const commitSeries = (candles: Candle[], symbol: string, message: string, isWarning: boolean) => {
+    const btf = detectBaseTF(candles);
+    useReplayStore.getState().resetReplay();
+    setSymbol(symbol);
+    setBaseCandles(candles, btf, true);
+    setDataSource('Fichier importé', false);
+    setTimeframe(btf);
+    triggerFitContent();
+    closeModal();
+    showToast(message, isWarning ? 'warning' : 'success', isWarning ? 8000 : 4000);
+  };
 
-    showToast(`Analyse et fusion de ${files.length} fichiers en cours...`, 'info', 3000);
-
-    const allCandles: Candle[] = [];
-
-    for (const file of files) {
-      try {
-        const text = await file.text();
-        if (file.name.endsWith('.json')) {
-          let parsed = JSON.parse(text);
-          if (!Array.isArray(parsed) && typeof parsed === 'object') {
-            parsed = parsed.candles || parsed.data || parsed[Object.keys(parsed)[0]];
-          }
-          if (Array.isArray(parsed)) {
-            for (const p of parsed) {
-              const t = parseTimestamp(p.time || p.date || p.timestamp);
-              const o = parseNumber(p.open || p.o);
-              const h = parseNumber(p.high || p.h);
-              const l = parseNumber(p.low || p.l);
-              const c = parseNumber(p.close || p.c);
-              const v = parseNumber(p.volume || p.vol || p.v) || 100;
-              if (t && t > 0 && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
-                allCandles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
-              }
-            }
-          }
-        } else {
-          // CSV Parsing
-          const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-          if (lines.length > 1) {
-            const counts: Record<string, number> = { ',': 0, ';': 0, '\t': 0, '|': 0 };
-            const headerLine = lines[0];
-            Object.keys(counts).forEach((sep) => {
-              counts[sep] = headerLine.split(sep).length - 1;
-            });
-            const bestSep = Object.keys(counts).reduce((a, b) => (counts[a] > counts[b] ? a : b));
-            const header = headerLine.split(bestSep).map((h) => h.trim().replace(/^["']|["']$/g, ''));
-            const dateCol = header.find((h) => autoMatchColumn(h, 'date')) || header[0];
-            const timeCol = header.find((h) => h !== dateCol && autoMatchColumn(h, 'time'));
-            const openCol = header.find((h) => autoMatchColumn(h, 'open')) || header[1];
-            const highCol = header.find((h) => autoMatchColumn(h, 'high')) || header[2];
-            const lowCol = header.find((h) => autoMatchColumn(h, 'low')) || header[3];
-            const closeCol = header.find((h) => autoMatchColumn(h, 'close')) || header[4];
-            const volCol = header.find((h) => autoMatchColumn(h, 'volume'));
-
-            const dIdx = header.indexOf(dateCol);
-            const tIdx = timeCol ? header.indexOf(timeCol) : -1;
-            const oIdx = header.indexOf(openCol);
-            const hIdx = header.indexOf(highCol);
-            const lIdx = header.indexOf(lowCol);
-            const cIdx = header.indexOf(closeCol);
-            const vIdx = volCol ? header.indexOf(volCol) : -1;
-
-            for (let i = 1; i < lines.length; i++) {
-              const r = lines[i].split(bestSep).map((v) => v.trim().replace(/^["']|["']$/g, ''));
-              let tStr = r[dIdx];
-              if (tIdx !== -1 && r[tIdx]) tStr = `${tStr} ${r[tIdx]}`;
-              const t = parseTimestamp(tStr);
-              const o = parseNumber(r[oIdx]);
-              const h = parseNumber(r[hIdx]);
-              const l = parseNumber(r[lIdx]);
-              const c = parseNumber(r[cIdx]);
-              const v = vIdx !== -1 ? parseNumber(r[vIdx]) || 100 : 100;
-              if (t && t > 0 && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c)) {
-                allCandles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Erreur lecture multi-fichiers:', file.name, err);
+  const importJson = async (file: File, symbol: string) => {
+    try {
+      const candles = sanitizeCandles(await readJsonRows(file));
+      if (candles.length === 0) {
+        showToast(
+          `Aucune bougie exploitable dans ${file.name}. Attendu : un tableau d’objets { time, open, high, low, close }.`,
+          'error',
+          6000
+        );
+        return;
       }
-    }
-
-    if (allCandles.length > 0) {
-      allCandles.sort((a, b) => a.time - b.time);
-      const deduplicated: Candle[] = [];
-      for (const c of allCandles) {
-        if (deduplicated.length > 0 && deduplicated[deduplicated.length - 1].time === c.time) {
-          deduplicated[deduplicated.length - 1] = c;
-        } else {
-          deduplicated.push(c);
-        }
-      }
-      const btf = detectBaseTF(deduplicated);
-      useReplayStore.getState().resetReplay();
-      setSymbol(sym);
-      setBaseCandles(deduplicated, btf, true);
-      setTimeframe(btf);
-      triggerFitContent();
-      closeModal();
-      showToast(`🟢 ${sym} : ${files.length} fichiers fusionnés (${deduplicated.length.toLocaleString()} bougies totales) !`, 'success', 4500);
-      return;
-    } else {
-      showToast('Impossible de lire les données des fichiers sélectionnés', 'error', 4500);
+      commitSeries(candles, symbol, `${symbol} importé · ${candles.length.toLocaleString('fr-FR')} bougies`, false);
+    } catch (error) {
+      console.warn('[ImportModal] JSON import failed:', error);
+      showToast(`${file.name} n’est pas un JSON valide. Vérifiez qu’il n’est pas tronqué.`, 'error', 6000);
     }
   };
 
-  const handleFile = (file: File) => {
-    setFileName(file.name);
-    const suggestedSymbol = file.name.replace(/\.[^/.]+$/, '').replace(/_FULL|_H1|_D1|_M15|_M5|_M1/gi, '').toUpperCase().slice(0, 16);
-    if (!symbolInput) {
-      setSymbolInput(suggestedSymbol);
+  /** Étape 1 : choix des fichiers, puis aperçu du premier CSV. */
+  const handleFiles = async (picked: File[]) => {
+    if (picked.length === 0 || isStreaming) return;
+
+    const { accepted, rejected } = screenFiles(picked);
+    if (rejected.length > 0) {
+      showToast(`Fichier(s) ignoré(s) : ${rejected.join(' ; ')}`, 'warning', 8000);
+    }
+    if (accepted.length === 0) return;
+
+    const symbol = symbolInput.trim() || suggestSymbol(accepted[0]);
+    setSymbolInput(symbol);
+    setFiles(accepted);
+
+    // Un JSON seul n'a pas de colonnes à associer : import direct.
+    if (accepted.length === 1 && isJson(accepted[0])) {
+      setPreview(null);
+      setMapping(null);
+      await importJson(accepted[0], symbol);
+      return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      if (!text) return;
-
-      if (file.name.endsWith('.json')) {
+    const firstCsv = accepted.find((f) => !isJson(f));
+    if (!firstCsv) {
+      // Que des JSON : rien à associer, fusion directe.
+      setPreview(null);
+      setMapping(null);
+      const merged: Candle[] = [];
+      for (const file of accepted) {
+        if (merged.length >= MAX_STREAMED_CANDLES) break;
         try {
-          let parsed = JSON.parse(text);
-          if (!Array.isArray(parsed) && typeof parsed === 'object') {
-            parsed = parsed.candles || parsed.data || parsed[Object.keys(parsed)[0]];
-          }
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const sym = symbolInput || suggestedSymbol;
-            const validCandles: Candle[] = parsed
-              .map((p) => ({
-                time: parseTimestamp(p.time || p.date || p.timestamp) || 0,
-                open: parseNumber(p.open || p.o),
-                high: parseNumber(p.high || p.h),
-                low: parseNumber(p.low || p.l),
-                close: parseNumber(p.close || p.c),
-                volume: parseNumber(p.volume || p.vol || p.v) || 100,
-              }))
-              .filter((c) => c.time > 0 && !isNaN(c.open) && !isNaN(c.high) && !isNaN(c.low) && !isNaN(c.close));
-
-            if (validCandles.length > 0) {
-              validCandles.sort((a, b) => a.time - b.time);
-              const btf = detectBaseTF(validCandles);
-              useReplayStore.getState().resetReplay();
-              setSymbol(sym);
-              setBaseCandles(validCandles, btf, true);
-              setTimeframe(btf);
-              triggerFitContent();
-              closeModal();
-              showToast(`🟢 ${sym} : ${validCandles.length.toLocaleString()} bougies importées !`, 'success', 3500);
-              return;
-            }
-          }
-        } catch {
-          showToast('Erreur de lecture du fichier JSON', 'error');
+          for (const candle of await readJsonRows(file)) merged.push(candle as Candle);
+        } catch (error) {
+          console.warn('[ImportModal] JSON read failed:', file.name, error);
         }
+      }
+      const candles = sanitizeCandles(merged);
+      if (candles.length === 0) {
+        showToast('Aucune bougie exploitable dans ces fichiers JSON.', 'error', 6000);
         return;
       }
-
-      // CSV Parsing
-      const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-      if (lines.length < 2) {
-        showToast('Fichier CSV vide ou incomplet', 'warning');
-        return;
-      }
-
-      // Detect separator: comma, semicolon, tab, pipe
-      const counts: Record<string, number> = { ',': 0, ';': 0, '\t': 0, '|': 0 };
-      const headerLine = lines[0];
-      Object.keys(counts).forEach((sep) => {
-        counts[sep] = headerLine.split(sep).length - 1;
-      });
-      const bestSep = Object.keys(counts).reduce((a, b) => (counts[a] > counts[b] ? a : b));
-
-      const header = headerLine.split(bestSep).map((h) => h.trim().replace(/^["']|["']$/g, ''));
-      setColumns(header);
-
-      const parsedRows = lines.slice(1).map((l) =>
-        l.split(bestSep).map((v) => v.trim().replace(/^["']|["']$/g, ''))
+      commitSeries(
+        candles,
+        symbol,
+        `${symbol} · ${accepted.length} fichiers fusionnés · ${candles.length.toLocaleString('fr-FR')} bougies`,
+        false
       );
-      setRawRows(parsedRows);
-
-      // Match date and other columns
-      const matchedDate = header.find((h) => autoMatchColumn(h, 'date')) || header[0] || '';
-      // Only set time column if there is a DISTINCT time column different from date
-      const matchedTime = header.find((h) => h !== matchedDate && autoMatchColumn(h, 'time')) || '';
-
-      const mapping = {
-        date: matchedDate,
-        time: matchedTime,
-        open: header.find((h) => autoMatchColumn(h, 'open')) || header[1] || '',
-        high: header.find((h) => autoMatchColumn(h, 'high')) || header[2] || '',
-        low: header.find((h) => autoMatchColumn(h, 'low')) || header[3] || '',
-        close: header.find((h) => autoMatchColumn(h, 'close')) || header[4] || '',
-        volume: header.find((h) => autoMatchColumn(h, 'volume')) || '',
-      };
-      setColMapping(mapping);
-    };
-    reader.readAsText(file);
-  };
-
-  const handleImport = () => {
-    if (!rawRows.length || !columns.length) {
-      showToast('Veuillez sélectionner ou glisser un fichier CSV/JSON', 'warning');
       return;
     }
 
-    const dateColName = colMapping.date || columns.find((h) => autoMatchColumn(h, 'date')) || columns[0];
-    const timeColName = colMapping.time;
-    const openColName = colMapping.open || columns.find((h) => autoMatchColumn(h, 'open')) || columns[1];
-    const highColName = colMapping.high || columns.find((h) => autoMatchColumn(h, 'high')) || columns[2];
-    const lowColName = colMapping.low || columns.find((h) => autoMatchColumn(h, 'low')) || columns[3];
-    const closeColName = colMapping.close || columns.find((h) => autoMatchColumn(h, 'close')) || columns[4];
-    const volColName = colMapping.volume;
-
-    const dateIdx = columns.indexOf(dateColName);
-    // Never concatenate if time column is same as date column or not specified
-    const timeIdx = timeColName && timeColName !== dateColName ? columns.indexOf(timeColName) : -1;
-    const openIdx = columns.indexOf(openColName);
-    const highIdx = columns.indexOf(highColName);
-    const lowIdx = columns.indexOf(lowColName);
-    const closeIdx = columns.indexOf(closeColName);
-    const volIdx = volColName ? columns.indexOf(volColName) : -1;
-
-    const candles: Candle[] = [];
-    const seenTimes = new Set<number>();
-
-    for (const r of rawRows) {
-      if (!r || r.length === 0) continue;
-      let tStr = r[dateIdx];
-      if (timeIdx !== -1 && r[timeIdx]) {
-        tStr = `${tStr} ${r[timeIdx]}`;
+    try {
+      const table = parseCsv(await readHead(firstCsv), 2_000);
+      if (table.header.length === 0 || table.rows.length === 0) {
+        showToast(`${firstCsv.name} est vide ou ne contient qu’une ligne.`, 'warning', 5000);
+        return;
       }
-      const parsedTime = parseTimestamp(tStr);
-
-      const o = parseNumber(r[openIdx]);
-      const h = parseNumber(r[highIdx]);
-      const l = parseNumber(r[lowIdx]);
-      const cl = parseNumber(r[closeIdx]);
-      const v = volIdx !== -1 ? parseNumber(r[volIdx]) || 100 : 100;
-
-      if (parsedTime !== null && parsedTime > 0 && !isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(cl)) {
-        if (!seenTimes.has(parsedTime)) {
-          seenTimes.add(parsedTime);
-          candles.push({ time: parsedTime, open: o, high: h, low: l, close: cl, volume: v });
-        }
+      if (table.header.length < 2) {
+        showToast(
+          'Une seule colonne détectée : vérifiez le séparateur (virgule, point-virgule, tabulation ou barre verticale).',
+          'warning',
+          6000
+        );
       }
-    }
 
-    candles.sort((a, b) => a.time - b.time);
+      const inferred = inferColumnMapping(table.header);
+      const dateIdx = table.header.indexOf(inferred.date);
+      const dateSamples = table.rows.map((r) => r[dateIdx] ?? '');
+      const detectedOrder = detectDateOrder(dateSamples);
 
-    if (candles.length > 0) {
-      const sym = symbolInput.trim() || fileName.replace(/\.[^/.]+$/, '').toUpperCase();
-      const btf = detectBaseTF(candles);
-      useReplayStore.getState().resetReplay();
-      setSymbol(sym);
-      setBaseCandles(candles, btf, true);
-      setTimeframe(btf);
-      triggerFitContent();
-      closeModal();
-      showToast(`🟢 ${sym} : ${candles.length.toLocaleString()} bougies affichées sur le graphique !`, 'success', 3500);
-    } else {
-      showToast('Impossible de lire les données. Vérifiez l’association des colonnes Date/Open/High/Low/Close.', 'error', 4500);
+      setPreview({ table, slashDates: hasSlashDates(dateSamples), detectedOrder });
+      setMapping(inferred);
+      setDateOrder(detectedOrder ?? 'DMY');
+    } catch (error) {
+      console.warn('[ImportModal] preview failed:', error);
+      showToast(`Lecture impossible : ${firstCsv.name}. Le fichier est peut-être verrouillé ou corrompu.`, 'error', 6000);
     }
   };
+
+  /** Étape 2 : lecture complète, en flux, avec le mappage confirmé. */
+  const handleImport = async () => {
+    if (files.length === 0 || !mapping) {
+      showToast('Choisissez d’abord un fichier CSV ou JSON.', 'warning');
+      return;
+    }
+    if (!mapping.date || !mapping.close) {
+      showToast('Associez au moins les colonnes Date et Clôture.', 'error', 5000);
+      return;
+    }
+
+    const symbol = symbolInput.trim() || suggestSymbol(files[0]);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const readTimestamp = (value: unknown) => parseTimestamp(value, dateOrder);
+
+    const collected: Candle[] = [];
+    const failed: string[] = [];
+    let linesRead = 0;
+    let linesRejected = 0;
+    let firstRejected: RejectedSample | null = null;
+    let downsampledTo = 0;
+    let truncated = false;
+    let skippedForMemory = 0;
+
+    setIsStreaming(true);
+    try {
+      for (const [index, file] of files.entries()) {
+        if (controller.signal.aborted) break;
+        const position = files.length > 1 ? ` (${index + 1}/${files.length})` : '';
+        setStreamProgress(`Lecture de ${file.name}${position} · ${formatBytes(file.size)}…`);
+
+        try {
+          if (isJson(file)) {
+            // Boucle et non `push(...rows)` : l'étalement lève `RangeError`
+            // au-delà d'environ 150 000 éléments, et le fichier passait pour
+            // « illisible ».
+            for (const candle of sanitizeCandles(await readJsonRows(file))) collected.push(candle);
+            // Même plafond global que le CSV : 20 JSON de 100 Mo tenaient sinon
+            // en mémoire. On cesse de lire plutôt que de couper au hasard.
+            if (collected.length >= MAX_STREAMED_CANDLES) {
+              skippedForMemory = files.length - index - 1;
+              break;
+            }
+            continue;
+          }
+
+          const result = await streamCsvCandles(file, readTimestamp, {
+            // Le plafond vaut pour la fusion, pas par fichier : sinon N
+            // fichiers au plafond dépassent la limite d'un facteur N.
+            maxCandles: Math.max(1, Math.floor(MAX_STREAMED_CANDLES / files.length)),
+            overflow: 'downsample',
+            mapping,
+            signal: controller.signal,
+            onProgress: (lines) =>
+              setStreamProgress(`${file.name}${position} · ${lines.toLocaleString('fr-FR')} lignes lues…`),
+          });
+
+          for (const candle of result.candles) collected.push(candle);
+          linesRead += result.linesRead;
+          linesRejected += result.linesRejected;
+          firstRejected ??= result.firstRejected;
+          truncated ||= result.truncated;
+          if (result.resolutionSeconds > result.sourceResolutionSeconds && result.sourceResolutionSeconds > 0) {
+            downsampledTo = Math.max(downsampledTo, result.resolutionSeconds);
+          }
+        } catch (error) {
+          console.warn('[ImportModal] failed to read', file.name, error);
+          failed.push(file.name);
+        }
+      }
+    } finally {
+      setIsStreaming(false);
+      setStreamProgress('');
+      abortRef.current = null;
+    }
+
+    // Annulé : ne rien charger. L'ancienne branche disait « non importées »
+    // après avoir déjà remplacé le graphique.
+    if (controller.signal.aborted) {
+      showToast('Import annulé : le graphique n’a pas été modifié.', 'info', 3500);
+      return;
+    }
+
+    // Un seul passage assainit l'ordre, les doublons entre fichiers et les NaN.
+    const merged = files.length > 1 ? sanitizeCandles(collected) : collected;
+
+    if (merged.length === 0) {
+      showToast(
+        firstRejected
+          ? `Aucune bougie exploitable — ${describeRejection(firstRejected)}`
+          : failed.length > 0
+            ? `Aucune donnée exploitable. Fichiers illisibles : ${failed.join(', ')}.`
+            : 'Aucune bougie exploitable : vérifiez l’association des colonnes.',
+        'error',
+        9000
+      );
+      return;
+    }
+
+    const count = merged.length.toLocaleString('fr-FR');
+    const parts = [
+      files.length > 1 ? `${symbol} · ${files.length} fichiers fusionnés · ${count} bougies` : `${symbol} importé · ${count} bougies`,
+    ];
+    if (downsampledTo > 0) {
+      parts.push(`agrégées en ${labelForSeconds(downsampledTo)} pour tenir en mémoire — toute la période est conservée`);
+    } else if (truncated) {
+      parts.push(`plus récentes seulement (limite mémoire, ${linesRead.toLocaleString('fr-FR')} lignes lues)`);
+    }
+    if (linesRejected > 0 && firstRejected) {
+      parts.push(`${linesRejected.toLocaleString('fr-FR')} ligne(s) ignorée(s), 1re : ${describeRejection(firstRejected)}`);
+    }
+    if (failed.length > 0) parts.push(`illisible(s) : ${failed.join(', ')}`);
+    if (skippedForMemory > 0) {
+      parts.push(`limite mémoire atteinte : ${skippedForMemory} fichier(s) suivant(s) non lu(s)`);
+    }
+
+    commitSeries(
+      merged,
+      symbol,
+      parts.join(' · '),
+      linesRejected > 0 || failed.length > 0 || truncated || skippedForMemory > 0
+    );
+  };
+
+  const cancelImport = () => abortRef.current?.abort();
+
+  // ── Aperçu interprété ──
+  const previewRows = (() => {
+    if (!preview || !mapping) return [];
+    const { header, rows } = preview.table;
+    const at = (role: ColumnRole) => (mapping[role] ? header.indexOf(mapping[role]) : -1);
+    const idx = Object.fromEntries(ROLES.map((r) => [r, at(r)])) as Record<ColumnRole, number>;
+
+    return rows.slice(0, PREVIEW_ROWS).map((cells) => {
+      const dateCell = cells[idx.date] ?? '';
+      const timeCell = idx.time !== -1 && idx.time !== idx.date ? cells[idx.time] : '';
+      const time = parseTimestamp(timeCell ? `${dateCell} ${timeCell}` : dateCell, dateOrder);
+      const num = (role: ColumnRole) => (idx[role] === -1 ? Number.NaN : parseNumber(cells[idx[role]]));
+      const open = num('open');
+      const high = num('high');
+      const low = num('low');
+      const close = num('close');
+      const inconsistent = Number.isFinite(high) && Number.isFinite(low) && high < low;
+      return {
+        date: time === null ? null : new Date(time * 1000).toISOString().slice(0, 16).replace('T', ' '),
+        open,
+        high,
+        low,
+        close,
+        volume: num('volume'),
+        inconsistent,
+      };
+    });
+  })();
+
+  const cell = (value: number, invalid = false) => (
+    <td className={invalid || !Number.isFinite(value) ? 'is-invalid' : undefined}>
+      {Number.isFinite(value) ? value : '—'}
+    </td>
+  );
+
+  const canImport = files.length > 0 && mapping !== null && !isStreaming;
 
   return (
-    <div id="modal-overlay" className="open" style={{ display: 'flex' }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
-      <div id="modal">
+    <div
+      id="modal-overlay"
+      className="open u-display-flex"
+      onClick={(e) => {
+        // Fermer démonte la modale et annule la lecture en cours.
+        if (e.target === e.currentTarget) closeModal();
+      }}
+    >
+      <div id="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="import-title">
         <div className="modal-header">
-          <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <UploadCloud size={16} strokeWidth={2} style={{ color: '#38BDF8' }} />
-            <span>Importer des données</span>
+          <div className="modal-title u-display-flex u-align-items-center u-gap-8px" id="import-title">
+            <UploadCloud size={16} strokeWidth={2} className="u-color-38bdf8" />
+            <span>Importer un fichier</span>
           </div>
-          <button className="modal-close" onClick={closeModal} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <button className="modal-close u-display-flex u-align-items-center u-justify-content-center" onClick={closeModal} aria-label="Fermer">
             <X size={15} strokeWidth={2.4} />
           </button>
         </div>
@@ -387,32 +487,53 @@ export const ImportModal: React.FC = () => {
           <input
             type="text"
             id="symbol-input"
-            placeholder="Symbole (ex : VOLATILITY 100, EURUSD…)"
+            placeholder="Nom de l’instrument — ex. EURUSD"
+            aria-label="Nom de l’instrument"
             value={symbolInput}
             onChange={(e) => setSymbolInput(e.target.value)}
           />
         </div>
 
+        {/* Un gros fichier prend plusieurs secondes : sans retour, l'import
+            passe pour un échec silencieux — et sans bouton, il ne s'arrête pas. */}
+        {isStreaming && (
+          <div className="import-progress" role="status" aria-live="polite">
+            <Loader2 size={13} strokeWidth={2.2} className="import-spinner" aria-hidden />
+            <span className="import-progress-text">{streamProgress || 'Lecture en cours…'}</span>
+            <button type="button" className="btn-sm" onClick={cancelImport}>
+              Annuler
+            </button>
+          </div>
+        )}
+
         <div
           id="modal-drop"
-          onClick={() => fileInputRef.current?.click()}
+          role="button"
+          tabIndex={0}
+          aria-label="Choisir un ou plusieurs fichiers CSV ou JSON"
+          onClick={() => !isStreaming && fileInputRef.current?.click()}
+          onKeyDown={(e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && !isStreaming) {
+              e.preventDefault();
+              fileInputRef.current?.click();
+            }
+          }}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            const files = Array.from(e.dataTransfer.files || []);
-            if (files.length > 0) handleFiles(files);
+            void handleFiles(Array.from(e.dataTransfer.files || []));
           }}
-          style={{ cursor: 'pointer' }}
+          style={{ cursor: isStreaming ? 'wait' : 'pointer' }}
         >
-          <div className="drop-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <FileSpreadsheet size={32} strokeWidth={1.5} style={{ color: '#38BDF8' }} />
+          <div className="drop-icon u-display-flex u-align-items-center u-justify-content-center">
+            <FileSpreadsheet size={32} strokeWidth={1.5} className="u-color-38bdf8" />
           </div>
-          <div className="drop-text" id="drop-filename">{fileName}</div>
+          <div className="drop-text" id="drop-filename">{dropLabel}</div>
           <div className="drop-hint">ou cliquez pour sélectionner un ou plusieurs fichiers</div>
           <div className="drop-formats">
             <span className="fmt-badge">CSV</span>
             <span className="fmt-badge">JSON</span>
-            <span className="fmt-badge" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38BDF8', borderColor: 'rgba(56, 189, 248, 0.3)' }}>Multi-fichiers</span>
+            <span className="fmt-badge u-background-rgba-56-189-248-0_15 u-color-38bdf8 u-border-color-rgba-56-189-248-0_3">Multi-fichiers</span>
           </div>
         </div>
 
@@ -421,57 +542,119 @@ export const ImportModal: React.FC = () => {
           id="file-hidden"
           ref={fileInputRef}
           accept=".csv,.json,.txt"
-          multiple
-          style={{ display: 'none' }}
+          multiple className="u-display-none"
           onChange={(e) => {
-            const files = Array.from(e.target.files || []);
-            if (files.length > 0) handleFiles(files);
+            const picked = Array.from(e.target.files || []);
+            // Vider *avant* de traiter : le champ doit être neuf même si
+            // l'utilisateur reprend le même fichier juste après un échec.
+            e.target.value = '';
+            void handleFiles(picked);
           }}
         />
 
-        {columns.length > 0 && (
-          <div id="col-mapper" style={{ display: 'block', marginTop: '12px' }}>
-            <div className="col-map-title" style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
-              Associer les colonnes
-            </div>
+        {preview && mapping && (
+          <div id="col-mapper" className="visible">
+            {!preview.table.hasHeader && (
+              <p className="import-note">
+                <AlertTriangle size={12} strokeWidth={2.2} aria-hidden />
+                Fichier sans ligne d’en-tête (export MT4 ou courtier) : colonnes associées par position.
+                Vérifiez l’aperçu.
+              </p>
+            )}
+
+            <div className="col-map-title">Associer les colonnes</div>
             <div className="col-map-grid">
-              {(['date', 'time', 'open', 'high', 'low', 'close', 'volume'] as const).map((col) => (
-                <div key={col} className="col-map-item">
-                  <label>{col.toUpperCase()} {col !== 'time' && col !== 'volume' ? '*' : ''}</label>
+              {ROLES.map((role) => (
+                <div key={role} className="col-map-item">
+                  <label htmlFor={`map-${role}`}>
+                    {ROLE_LABELS[role]} {role === 'date' || role === 'close' ? '*' : ''}
+                  </label>
                   <select
-                    value={colMapping[col]}
-                    onChange={(e) => setColMapping({ ...colMapping, [col]: e.target.value })}
+                    id={`map-${role}`}
+                    value={mapping[role]}
+                    onChange={(e) => setMapping({ ...mapping, [role]: e.target.value })}
                   >
                     <option value="">
-                      {col === 'time' ? '— Aucun (Date complète ou timestamp) —' : col === 'volume' ? '— Aucun (Défaut 100) —' : '— Sélectionner —'}
+                      {role === 'time'
+                        ? '— Aucune (date complète ou horodatage) —'
+                        : role === 'volume'
+                          ? '— Aucun (pas de volume) —'
+                          : '— Aucune —'}
                     </option>
-                    {columns.map((c) => (
+                    {preview.table.header.map((c) => (
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
                 </div>
               ))}
+
+              {preview.slashDates && (
+                <div className="col-map-item">
+                  <label htmlFor="map-date-order">
+                    Format des dates{preview.detectedOrder === null ? ' — à confirmer' : ''}
+                  </label>
+                  <select
+                    id="map-date-order"
+                    value={dateOrder}
+                    onChange={(e) => setDateOrder(e.target.value as DateOrder)}
+                  >
+                    <option value="DMY">JJ/MM/AAAA (européen)</option>
+                    <option value="MDY">MM/JJ/AAAA (américain)</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Ce que l'import va réellement lire. Des listes de noms de
+                colonnes ne montraient pas qu'un mappage était décalé. */}
+            <div className="col-map-title">Aperçu interprété</div>
+            <div className="import-preview-wrap">
+              <table className="import-preview">
+                <thead>
+                  <tr>
+                    <th>Date (UTC)</th>
+                    <th>O</th>
+                    <th>H</th>
+                    <th>L</th>
+                    <th>C</th>
+                    <th>V</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewRows.map((r, i) => (
+                    <tr key={i}>
+                      <td className={r.date === null ? 'is-invalid' : undefined}>{r.date ?? 'illisible'}</td>
+                      {cell(r.open)}
+                      {cell(r.high, r.inconsistent)}
+                      {cell(r.low, r.inconsistent)}
+                      {cell(r.close)}
+                      <td>{Number.isFinite(r.volume) ? r.volume : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
 
         <button
           id="import-btn"
-          className={columns.length > 0 ? 'ready' : ''}
-          onClick={handleImport}
+          className={canImport ? 'ready' : ''}
+          onClick={() => void handleImport()}
+          disabled={!canImport}
           style={{
             marginTop: '16px',
             width: '100%',
             height: '38px',
-            background: columns.length > 0 ? 'var(--accent)' : 'var(--bg-elevated)',
+            background: canImport ? 'var(--accent)' : 'var(--bg-elevated)',
             color: '#FFFFFF',
             border: 'none',
             borderRadius: 'var(--radius-sm)',
             fontWeight: 600,
-            cursor: columns.length > 0 ? 'pointer' : 'default',
+            cursor: canImport ? 'pointer' : 'default',
           }}
         >
-          Afficher le graphique
+          {isStreaming ? 'Lecture en cours…' : 'Importer'}
         </button>
       </div>
     </div>

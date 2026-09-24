@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import { useDialogFocus } from '../../hooks/useDialogFocus';
 import { Camera, X, Copy, Download } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useMarketStore } from '../../store/useMarketStore';
@@ -48,6 +49,9 @@ export const SnapshotModal: React.FC = () => {
     }
   }, [activeModal, currentSymbol]);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef, activeModal === 'snapshot');
+
   if (activeModal !== 'snapshot') return null;
 
   const activeImg = snapshotDataUrl || localUrl;
@@ -74,44 +78,42 @@ export const SnapshotModal: React.FC = () => {
   };
 
   return (
-    <div id="snapshot-modal" className="custom-modal open" style={{ display: 'flex', opacity: 1 }} onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
-      <div className="custom-modal-box snapshot-box" style={{ maxWidth: '820px' }}>
+    <div id="snapshot-modal" className="custom-modal open u-display-flex u-opacity-1" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+      <div className="custom-modal-box snapshot-box u-max-width-820px" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Capture du graphique">
         <div className="custom-modal-header">
-          <div className="custom-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Camera size={16} strokeWidth={2} style={{ color: '#38BDF8' }} />
-            <span>Capture HD du Graphique</span>
+          <div className="custom-modal-title u-display-flex u-align-items-center u-gap-8px">
+            <Camera size={16} strokeWidth={2} className="u-color-38bdf8" />
+            <span>Capture du graphique</span>
           </div>
-          <button className="custom-modal-close" onClick={closeModal} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <button className="custom-modal-close u-display-flex u-align-items-center u-justify-content-center" onClick={closeModal}>
             <X size={15} strokeWidth={2.4} />
           </button>
         </div>
 
-        <div className="custom-modal-body snapshot-body" style={{ padding: '16px', textAlign: 'center' }}>
+        <div className="custom-modal-body snapshot-body u-padding-16px u-text-align-center">
           {activeImg ? (
-            <img src={activeImg} alt="Aperçu Capture" className="snapshot-img" style={{ width: '100%', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-lg)' }} />
+            <img src={activeImg} alt="Aperçu Capture" className="snapshot-img u-width-100pct u-border-radius-radius-sm u-border-1px-solid-border-light u-box-shadow-shadow-lg" />
           ) : (
-            <div style={{ padding: '60px', color: 'var(--text-muted)' }}>Génération de la capture HD...</div>
+            <div className="u-padding-60px u-color-text-muted">Génération de l’image…</div>
           )}
         </div>
 
-        <div className="custom-modal-actions" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+        <div className="custom-modal-actions u-padding-12px-16px u-display-flex u-justify-content-flex-end u-gap-8px">
           <button
-            className="trade-btn buy"
-            style={{ height: '34px', padding: '0 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            className="trade-btn buy u-height-34px u-padding-0-16px u-display-flex u-align-items-center u-gap-6px"
             onClick={copyToClipboard}
           >
             <Copy size={13} strokeWidth={2} />
             <span>Copier l'image</span>
           </button>
           <button
-            className="trade-btn"
-            style={{ height: '34px', padding: '0 16px', background: 'var(--accent)', color: '#FFF', display: 'flex', alignItems: 'center', gap: '6px' }}
+            className="trade-btn u-height-34px u-padding-0-16px u-background-accent u-color-fff u-display-flex u-align-items-center u-gap-6px"
             onClick={downloadPNG}
           >
             <Download size={13} strokeWidth={2} />
-            <span>Télécharger PNG</span>
+            <span>Enregistrer en PNG</span>
           </button>
-          <button className="trade-btn" style={{ height: '34px', padding: '0 14px', background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }} onClick={closeModal}>Fermer</button>
+          <button className="trade-btn u-height-34px u-padding-0-14px u-background-bg-elevated u-color-text-secondary" onClick={closeModal}>Fermer</button>
         </div>
       </div>
     </div>

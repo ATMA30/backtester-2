@@ -241,15 +241,15 @@ export const DrawingSidebar: React.FC = () => {
       onMouseEnter={handleMouseEnter}
     >
       {/* Sleek Drag Grip Handle */}
-      <div className="draw-drag-handle" title="Glisser pour déplacer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <GripVertical size={13} strokeWidth={2} style={{ color: 'var(--text-muted)', opacity: 0.6 }} />
+      <div className="draw-drag-handle u-display-flex u-align-items-center u-justify-content-center" title="Glisser pour déplacer">
+        <GripVertical size={13} strokeWidth={2} className="u-color-text-muted u-opacity-0_6" />
       </div>
 
       {/* Selection */}
       <button
         className={`draw-btn ${activeTool === 'cursor' ? 'active' : ''}`}
         id="dt-cursor"
-        title="Sélection (1)"
+        title="Sélection · 1"
         onClick={() => setActiveTool('cursor')}
       >
         <MousePointer size={15} strokeWidth={activeTool === 'cursor' ? 2.2 : 1.8} />
@@ -261,7 +261,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'trendline' ? 'active' : ''}`}
         id="dt-trendline"
-        title="Ligne de tendance (2)"
+        title="Ligne de tendance · 2"
         onClick={() => setActiveTool('trendline')}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={activeTool === 'trendline' ? "2.5" : "2"} strokeLinecap="round">
@@ -275,7 +275,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'hline' ? 'active' : ''}`}
         id="dt-hline"
-        title="Ligne horizontale (3)"
+        title="Ligne horizontale · 3"
         onClick={() => setActiveTool('hline')}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={activeTool === 'hline' ? "2.5" : "2"} strokeLinecap="round">
@@ -288,7 +288,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'vline' ? 'active' : ''}`}
         id="dt-vline"
-        title="Ligne verticale (4)"
+        title="Ligne verticale · 4"
         onClick={() => setActiveTool('vline')}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={activeTool === 'vline' ? "2.5" : "2"} strokeLinecap="round">
@@ -301,7 +301,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'ray' ? 'active' : ''}`}
         id="dt-ray"
-        title="Rayon (R)"
+        title="Rayon · R"
         onClick={() => setActiveTool('ray')}
       >
         <ArrowUpRight size={15} strokeWidth={activeTool === 'ray' ? 2.4 : 1.9} />
@@ -313,7 +313,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'rect' ? 'active' : ''}`}
         id="dt-rect"
-        title="Rectangle (5)"
+        title="Rectangle · 5"
         onClick={() => setActiveTool('rect')}
       >
         <Square size={15} strokeWidth={activeTool === 'rect' ? 2.2 : 1.8} />
@@ -323,7 +323,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'fib' ? 'active' : ''}`}
         id="dt-fib"
-        title="Retracement de Fibonacci (6)"
+        title="Retracement de Fibonacci · 6"
         onClick={() => setActiveTool('fib')}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -346,7 +346,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'channel' ? 'active' : ''}`}
         id="dt-channel"
-        title="Canal parallèle de tendance (8)"
+        title="Canal parallèle · 8"
         onClick={() => setActiveTool('channel')}
       >
         <Layers size={17} strokeWidth={activeTool === 'channel' ? 2.4 : 1.9} />
@@ -358,7 +358,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'pos_long' ? 'active' : ''}`}
         id="dt-pos-long"
-        title="Position Long / Ratio R:R (9)"
+        title="Position acheteuse · 9"
         onClick={() => setActiveTool('pos_long')}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -377,7 +377,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'pos_short' ? 'active' : ''}`}
         id="dt-pos-short"
-        title="Position Short / Ratio R:R (0)"
+        title="Position vendeuse · 0"
         onClick={() => setActiveTool('pos_short')}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -398,7 +398,7 @@ export const DrawingSidebar: React.FC = () => {
       <button
         className={`draw-btn ${activeTool === 'text' ? 'active' : ''}`}
         id="dt-text"
-        title="Texte d'annotation (7)"
+        title="Annotation texte · 7"
         onClick={() => setActiveTool('text')}
       >
         <Type size={15} strokeWidth={activeTool === 'text' ? 2.4 : 1.9} />
@@ -409,7 +409,7 @@ export const DrawingSidebar: React.FC = () => {
       {/* Delete selection */}
       <button
         className="draw-btn danger"
-        title="Supprimer la sélection (Suppr)"
+        title="Supprimer le tracé · Suppr"
         onClick={() => {
           if (selectedDrawingId) removeDrawing(selectedDrawingId);
         }}
@@ -420,7 +420,7 @@ export const DrawingSidebar: React.FC = () => {
       {/* Clear all */}
       <button
         className="draw-btn danger"
-        title="Effacer tous les dessins"
+        title="Effacer tous les tracés"
         onClick={clearDrawings}
       >
         <Eraser size={15} strokeWidth={1.8} />

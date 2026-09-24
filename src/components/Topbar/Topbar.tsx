@@ -1,5 +1,8 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
+  BookOpen,
+  Keyboard,
+  MoreHorizontal,
   ChevronDown,
   TrendingUp,
   TrendingDown,
@@ -28,18 +31,51 @@ import {
   Slash,
   Loader2,
 } from 'lucide-react';
-import { useMarketStore, TIMEFRAME_DEFS, detectBaseTF, ALL_MARKET_PAIRS } from '../../store/useMarketStore';
+import { useMarketStore, TIMEFRAME_DEFS } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
 import { useUIStore } from '../../store/useUIStore';
-import { fetchHistoricalData } from '../../services/historicalApi';
+import { useTimeframeSwitch } from './useTimeframeSwitch';
+import { archiveLimitFor, checkArchiveDepth } from '../../domain/archive-limits';
+import { supportsSessions } from '../../domain/timeframes';
+import { AssetClass, formatPrice, getInstrument } from '../../domain/instruments';
+import { useIsFullscreen, toggleFullscreen } from '../../hooks/useFullscreen';
+import { blockRelocationWhileTrading } from '../Replay/replayGuards';
+
+/**
+ * Badge per asset class.
+ *
+ * The badge was previously guessed from substrings of the symbol — a fifth
+ * classifier, alongside `classifyUnknown` and three others the codebase had
+ * already consolidated into `domain/instruments`. It disagreed with them: any
+ * ticker containing "SOL" (SOLUSDT, but also a hypothetical SOLAR index) was
+ * labelled CRYPTO, and XAGUSD fell through to FX because no rule matched
+ * "XAG" before the metals branch. One catalogue, one answer.
+ */
+const MARKET_BADGES: Readonly<Record<AssetClass, { label: string; type: string }>> = {
+  forex: { label: 'FX', type: 'fx' },
+  metal: { label: 'COMMO', type: 'commo' },
+  energy: { label: 'COMMO', type: 'commo' },
+  index: { label: 'INDEX', type: 'index' },
+  crypto: { label: 'CRYPTO', type: 'crypto' },
+  synthetic: { label: 'SYNTH', type: 'synth' },
+};
+
+/** « 30 j » ne dit rien à personne ; « 30 derniers jours » si. */
+function formatArchiveDepth(days: number): string {
+  if (days >= 365) {
+    const years = Math.round(days / 365);
+    return `${years} an${years > 1 ? 's' : ''}`;
+  }
+  if (days >= 60) return `${Math.round(days / 30)} mois`;
+  return `${days} jours`;
+}
 
 export const Topbar: React.FC = () => {
-  const [downloadingTF, setDownloadingTF] = useState<string | null>(null);
+  const { downloadingTF, selectTimeframe } = useTimeframeSwitch();
   const {
     currentSymbol,
     activeTF,
     baseTF,
-    baseCandles,
     chartType,
     showVolume,
     showGrid,
@@ -48,9 +84,7 @@ export const Topbar: React.FC = () => {
     forexSessions,
     activeIndicators,
     displayCandles,
-    isImported,
-    setTimeframe,
-    setBaseCandles,
+    hasVolumeData,
     setChartType,
     toggleVolume,
     toggleGrid,
@@ -61,11 +95,31 @@ export const Topbar: React.FC = () => {
     removeIndicator,
   } = useMarketStore();
 
-  const { isActive: isReplayActive, isPicking, setIsActive, setIsPicking } = useReplayStore();
+  const { isActive: isReplayActive, isPicking, currentIndex, setIsActive, setIsPicking } = useReplayStore();
+  const baseCandles = useMarketStore((m) => m.baseCandles);
+
+  /** Les séances de marché exigent une résolution intraday. */
+  const sessionsAvailable = supportsSessions(activeTF);
+
+  /** Au moins une séance ou killzone cochée. */
+  const anySessionOn =
+    forexSessions.sydney ||
+    forexSessions.tokyo ||
+    forexSessions.london ||
+    forexSessions.newyork ||
+    forexSessions.asianRange ||
+    forexSessions.londonOpenKZ ||
+    forexSessions.nyOpenKZ ||
+    forexSessions.londonCloseKZ;
+
+  /** Instant sur lequel le replay est arrêté — ce que chaque flux doit pouvoir atteindre. */
+  const replayCutEpoch =
+    isReplayActive && baseCandles[currentIndex] ? baseCandles[currentIndex].time : null;
   const { activeDropdown, toggleDropdown, closeAllDropdowns, openModal, setSelectedIndicatorType, showToast } = useUIStore();
 
   const lastCandle = displayCandles[displayCandles.length - 1];
   const lastPrice = lastCandle ? lastCandle.close : 0;
+  const instrument = getInstrument(currentSymbol, lastPrice);
   const firstCandle = displayCandles[0];
   const changePercent =
     firstCandle && firstCandle.open > 0 && lastCandle
@@ -74,36 +128,16 @@ export const Topbar: React.FC = () => {
 
   const currentTFDef = TIMEFRAME_DEFS.find((t) => t.s === activeTF) || { label: '1D' };
 
-  const isFullscreen = typeof document !== 'undefined' && Boolean(document.fullscreenElement);
+  // Subscribed rather than read once per render: leaving fullscreen with F11 or
+  // Escape used to leave the menu entry stuck on "Quitter le plein écran".
+  const isFullscreen = useIsFullscreen();
 
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      showToast('Mode Immersion plein écran activé', 'info', 2000);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      showToast('Sortie du mode immersion', 'info', 2000);
-    }
+  const handleToggleFullscreen = async () => {
+    const entered = await toggleFullscreen();
+    showToast(entered ? 'Plein écran activé' : 'Plein écran quitté', 'info', 2000);
   };
 
-  const getMarketBadge = (symbol: string) => {
-    const s = symbol.toUpperCase();
-    if (s.startsWith('R_') || s.includes('VOLATILITY') || s.includes('BOOM') || s.includes('CRASH') || s.includes('STEP') || s.includes('JUMP') || s.includes('1HZ')) {
-      return { label: 'SYNTH', type: 'synth' };
-    }
-    if (s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('XRP') || s.includes('BNB') || s.includes('DOGE') || s.includes('CRYPTO')) {
-      return { label: 'CRYPTO', type: 'crypto' };
-    }
-    if (s.includes('SPX') || s.includes('NAS') || s.includes('US30') || s.includes('GER40') || s.includes('CAC40') || s.includes('INDEX')) {
-      return { label: 'INDEX', type: 'index' };
-    }
-    if (s.includes('XAU') || s.includes('GOLD') || s.includes('OIL') || s.includes('XAG') || s.includes('BRENT')) {
-      return { label: 'COMMO', type: 'commo' };
-    }
-    return { label: 'FX', type: 'fx' };
-  };
-
-  const marketBadge = getMarketBadge(currentSymbol);
+  const marketBadge = MARKET_BADGES[instrument.assetClass];
 
   return (
     <div id="topbar">
@@ -114,14 +148,17 @@ export const Topbar: React.FC = () => {
           id="topbar-ticker"
           className="topbar-asset-selector"
           onClick={() => openModal('live')}
-          title="Changer d'actif / Recherche de symboles"
+          title="Changer d'instrument"
         >
           <span className={`market-badge ${marketBadge.type}`}>{marketBadge.label}</span>
           <span id="ticker-symbol" className="ticker-symbol">{currentSymbol}</span>
           <ChevronDown size={12} strokeWidth={2.2} className="ticker-chevron" />
           <div className="ticker-sep" />
           <span id="ticker-price" className="ticker-price">
-            {lastPrice > 0 ? lastPrice.toFixed(lastPrice < 10 ? 5 : 2) : '—'}
+            {/* `toFixed(price < 10 ? 5 : 2)` was the last magnitude-based
+                precision heuristic left in the UI: it printed gold at 2 digits
+                and DOGE at 5 regardless of their catalogue entries. */}
+            {lastPrice > 0 ? formatPrice(currentSymbol, lastPrice) : '—'}
           </span>
           <span
             id="ticker-change"
@@ -138,37 +175,49 @@ export const Topbar: React.FC = () => {
           </span>
         </div>
 
-        {/* 2. Passive Technical Witnesses (Live Flux & Sync Status) */}
+        {/* Le badge affichait « 24 ms » — un nombre littéral, jamais mesuré,
+            présenté comme une latence réelle. Le même écran prend soin de
+            distinguer bougies réelles et bougies simulées ; afficher une mesure
+            inventée juste à côté annule cette précaution. Le bouton reste, il
+            dit maintenant ce qu'il fait. */}
         <div
           className="topbar-witness-badge"
           onClick={() => openModal('live')}
-          title="24 ms — Flux en direct connecté (Cliquez pour configurer)"
+          title="Choisir l’instrument et la source de données"
         >
-          <Activity size={12} strokeWidth={2} style={{ color: '#10B981' }} />
-          <span className="witness-label">24 ms</span>
+          <Activity size={12} strokeWidth={2} className="u-color-10b981" />
+          <span className="witness-label">Source</span>
         </div>
 
         <div
           className="topbar-witness-badge"
           onClick={() => openModal('datasets')}
-          title="Gestionnaire de Sessions de Backtest & Datasets"
+          title="Sauvegardes et jeux de données"
         >
-          <Database size={12} strokeWidth={2} style={{ color: '#38BDF8' }} />
-          <span className="witness-label">Sessions</span>
+          <Database size={12} strokeWidth={2} className="u-color-38bdf8" />
+          <span className="witness-label">Sauvegardes</span>
         </div>
 
         <div className="topbar-divider" />
 
         {/* 3. BLOC VUES & OUTILS: Volumes, Grille, Séparateurs, Sessions Forex, Immersion, Capture, Sons */}
         <div className="topbar-icon-group">
-          {/* Volume */}
+          {/* Volume — inactif quand la source n'en publie pas, plutôt qu'une
+              bascule sans effet visible. */}
           <button
-            className={`tv-icon-btn ${showVolume ? 'active' : ''}`}
+            className={`tv-icon-btn ${showVolume && hasVolumeData ? 'active' : ''} ${!hasVolumeData ? 'unavailable' : ''}`}
             id="btn-volume"
             onClick={toggleVolume}
-            title={showVolume ? 'Volume histogramme (Activé)' : 'Volume histogramme (Désactivé)'}
+            disabled={!hasVolumeData}
+            title={
+              !hasVolumeData
+                ? `Aucun volume publié pour ${currentSymbol} à cette source`
+                : showVolume
+                  ? 'Masquer le volume'
+                  : 'Afficher le volume'
+            }
           >
-            <BarChart2 size={16} strokeWidth={showVolume ? 2.2 : 1.8} />
+            <BarChart2 size={16} strokeWidth={showVolume && hasVolumeData ? 2.2 : 1.8} />
           </button>
 
           {/* Grille */}
@@ -187,12 +236,12 @@ export const Topbar: React.FC = () => {
               className={`tv-icon-btn ${separatorTF ? 'active' : ''}`}
               id="btn-sep"
               onClick={() => toggleDropdown('sep')}
-              title="Séparateurs de session / période"
+              title="Séparateurs de période"
             >
               <Columns size={16} strokeWidth={separatorTF ? 2.2 : 1.8} />
             </button>
             {activeDropdown === 'sep' && (
-              <div className="tv-dropdown-menu sep-menu show" style={{ display: 'block' }}>
+              <div className="tv-dropdown-menu sep-menu show u-display-block">
                 <div className="sep-menu-title">Séparateurs de période</div>
                 {[
                   { tf: null, label: 'Désactivé', icon: <Slash size={12} strokeWidth={2} /> },
@@ -203,15 +252,14 @@ export const Topbar: React.FC = () => {
                 ].map((s) => (
                   <div
                     key={String(s.tf)}
-                    className={`tv-dropdown-item ${separatorTF === s.tf ? 'active' : ''}`}
+                    className={`tv-dropdown-item ${separatorTF === s.tf ? 'active' : ''} u-display-flex u-align-items-center u-gap-8px`}
                     onClick={() => {
                       setSeparatorTF(s.tf as any);
                       closeAllDropdowns();
                       showToast(`Séparateurs : ${s.label}`, 'info', 2000);
                     }}
-                    style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
-                    <span className={`sep-icon ${s.cls || ''}`} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                    <span className={`sep-icon ${s.cls || ''} u-display-inline-flex u-align-items-center`}>
                       {s.icon}
                     </span>
                     <span>{s.label}</span>
@@ -238,69 +286,53 @@ export const Topbar: React.FC = () => {
               }`}
               id="btn-forex"
               onClick={() => toggleDropdown('forex')}
-              title="Sessions de Marché Forex & Killzones ICT / SMC"
+              title="Séances de marché"
             >
               <Globe size={16} strokeWidth={1.8} />
             </button>
             {activeDropdown === 'forex' && (
               <div
-                className="tv-dropdown-menu forex-menu show"
-                style={{
-                  display: 'block',
-                  minWidth: '260px',
-                  maxHeight: '440px',
-                  overflowY: 'auto',
-                  padding: '8px',
-                }}
+                className={`tv-dropdown-menu forex-menu show ${sessionsAvailable ? '' : 'sessions-unavailable'} u-display-block u-min-width-260px u-max-height-440px u-overflow-y-auto u-padding-8px`}
               >
-                {/* Intraday Notice if on 1D or higher */}
-                {activeTF > 3600 && (
-                  <div
-                    style={{
-                      background: 'rgba(56, 189, 248, 0.1)',
-                      border: '1px solid rgba(56, 189, 248, 0.25)',
-                      borderRadius: '4px',
-                      padding: '8px 10px',
-                      marginBottom: '10px',
-                      fontSize: '11px',
-                      color: '#38BDF8',
-                      lineHeight: '1.4',
-                    }}
-                  >
-                    ℹ️ Les sessions s'affichent sur les unités intraday (≤ 1h). Passez en 1h ou moins pour voir les boîtes de trading.
+                {/* Une bougie journalière couvre Tokyo, Londres et New York à la
+                    fois : les séances n'ont alors aucun sens. Les cases étaient
+                    malgré tout cochables et ne produisaient rien. */}
+                {!sessionsAvailable && (
+                  <div className="sessions-notice">
+                    Les séances demandent une unité de temps de <strong>1 h ou moins</strong>.
+                    En {currentTFDef.label}, une bougie couvre toutes les séances à la fois.
                   </div>
                 )}
 
                 {/* 1. Sessions Majeures */}
-                <div className="sep-menu-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Sessions Majeures</span>
-                  <span
-                    style={{ fontSize: '10px', color: 'var(--accent)', cursor: 'pointer' }}
+                <div className="sep-menu-title u-display-flex u-justify-content-space-between u-align-items-center">
+                  <span>Séances principales</span>
+                  <span className="u-font-size-10px u-color-accent u-cursor-pointer"
                     onClick={(e) => { e.stopPropagation(); toggleForexSession('all'); }}
                   >
                     Tout basculer
                   </span>
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('sydney'); }}>
-                  <span className="forex-dot" style={{ background: '#A78BFA' }} />
+                  <span className="forex-dot u-background-a78bfa" />
                   <span className="forex-name">Sydney</span>
                   <span className="forex-hours">22h – 07h</span>
                   <input type="checkbox" checked={forexSessions.sydney} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('tokyo'); }}>
-                  <span className="forex-dot" style={{ background: '#FB923C' }} />
-                  <span className="forex-name">Tokyo / Asie</span>
+                  <span className="forex-dot u-background-fb923c" />
+                  <span className="forex-name">Tokyo</span>
                   <span className="forex-hours">00h – 09h</span>
                   <input type="checkbox" checked={forexSessions.tokyo} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('london'); }}>
-                  <span className="forex-dot" style={{ background: '#60A5FA' }} />
+                  <span className="forex-dot u-background-60a5fa" />
                   <span className="forex-name">Londres</span>
                   <span className="forex-hours">08h – 17h</span>
                   <input type="checkbox" checked={forexSessions.london} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('newyork'); }}>
-                  <span className="forex-dot" style={{ background: '#34D399' }} />
+                  <span className="forex-dot u-background-34d399" />
                   <span className="forex-name">New York</span>
                   <span className="forex-hours">13h – 22h</span>
                   <input type="checkbox" checked={forexSessions.newyork} onChange={() => {}} />
@@ -309,35 +341,34 @@ export const Topbar: React.FC = () => {
                 <div className="dropdown-divider" />
 
                 {/* 2. Killzones ICT */}
-                <div className="sep-menu-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div className="sep-menu-title u-display-flex u-justify-content-space-between u-align-items-center">
                   <span>Killzones ICT / SMC</span>
-                  <span
-                    style={{ fontSize: '10px', color: 'var(--accent)', cursor: 'pointer' }}
+                  <span className="u-font-size-10px u-color-accent u-cursor-pointer"
                     onClick={(e) => { e.stopPropagation(); toggleForexSession('all_kz'); }}
                   >
                     Tout basculer
                   </span>
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('asianRange'); }}>
-                  <span className="forex-dot" style={{ background: '#F472B6' }} />
+                  <span className="forex-dot u-background-f472b6" />
                   <span className="forex-name">Asian Range</span>
                   <span className="forex-hours">00h – 06h</span>
                   <input type="checkbox" checked={forexSessions.asianRange} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('londonOpenKZ'); }}>
-                  <span className="forex-dot" style={{ background: '#38BDF8' }} />
+                  <span className="forex-dot u-background-38bdf8" />
                   <span className="forex-name">London Open KZ</span>
                   <span className="forex-hours">07h – 10h</span>
                   <input type="checkbox" checked={forexSessions.londonOpenKZ} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('nyOpenKZ'); }}>
-                  <span className="forex-dot" style={{ background: '#4ADE80' }} />
+                  <span className="forex-dot u-background-4ade80" />
                   <span className="forex-name">NY Open KZ</span>
                   <span className="forex-hours">12h – 15h</span>
                   <input type="checkbox" checked={forexSessions.nyOpenKZ} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('londonCloseKZ'); }}>
-                  <span className="forex-dot" style={{ background: '#FBBF24' }} />
+                  <span className="forex-dot u-background-fbbf24" />
                   <span className="forex-name">London Close KZ</span>
                   <span className="forex-hours">15h – 17h</span>
                   <input type="checkbox" checked={forexSessions.londonCloseKZ} onChange={() => {}} />
@@ -345,14 +376,24 @@ export const Topbar: React.FC = () => {
 
                 <div className="dropdown-divider" />
 
+                {/* Séance active mais rien à voir : sans ces deux options, seul
+                    l'ombrage subsiste et rien n'explique la disparition des
+                    boîtes et des étiquettes. */}
+                {sessionsAvailable && anySessionOn && !forexSessions.showHighLow && !forexSessions.showLabels && (
+                  <div className="sessions-notice">
+                    Séance active, mais ni extrêmes ni étiquettes : seul l’ombrage s’affiche.
+                    Cochez une option ci-dessous.
+                  </div>
+                )}
+
                 {/* 3. Options d'affichage & Fuseaux */}
-                <div className="sep-menu-title">Options d'Affichage</div>
+                <div className="sep-menu-title">Affichage</div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('showHighLow'); }}>
-                  <span className="forex-name">Niveaux High & Low</span>
+                  <span className="forex-name">Extrêmes de séance</span>
                   <input type="checkbox" checked={forexSessions.showHighLow !== false} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexSession('showLabels'); }}>
-                  <span className="forex-name">Badges de Session</span>
+                  <span className="forex-name">Étiquettes de séance</span>
                   <input type="checkbox" checked={forexSessions.showLabels !== false} onChange={() => {}} />
                 </div>
                 <div className="forex-session-row" onClick={(e) => { e.stopPropagation(); toggleForexLocalTz(); }}>
@@ -363,35 +404,44 @@ export const Topbar: React.FC = () => {
             )}
           </div>
 
-          {/* Mode Immersion / Plein écran */}
-          <button
-            className="tv-icon-btn"
-            id="btn-fullscreen"
-            onClick={toggleFullscreen}
-            title="Mode Immersion / Plein Écran (F)"
-          >
-            {isFullscreen ? <Minimize2 size={16} strokeWidth={1.8} /> : <Maximize2 size={16} strokeWidth={1.8} />}
-          </button>
-
-          {/* Capture d'écran HD */}
-          <button
-            className="tv-icon-btn"
-            id="btn-snapshot"
-            onClick={() => openModal('snapshot')}
-            title="Capture d'écran HD (P)"
-          >
-            <Camera size={16} strokeWidth={1.8} />
-          </button>
-
-          {/* Sons de trading */}
-          <button
-            className={`tv-icon-btn ${soundEnabled ? 'active' : ''}`}
-            id="btn-sound"
-            onClick={toggleSound}
-            title={soundEnabled ? 'Effets sonores (Activés)' : 'Effets sonores (Désactivés / Muet)'}
-          >
-            {soundEnabled ? <Volume2 size={16} strokeWidth={1.8} /> : <VolumeX size={16} strokeWidth={1.8} />}
-          </button>
+          {/* Actions applicatives, hors du flux d'analyse : trois icônes de
+              moins dans une rangée qui en comptait huit de poids identique. */}
+          <div className="tv-dropdown u-position-relative">
+            <button
+              className="tv-icon-btn"
+              id="btn-more"
+              onClick={() => toggleDropdown('more')}
+              title="Plus d’actions"
+              aria-haspopup="menu"
+              aria-expanded={activeDropdown === 'more'}
+            >
+              <MoreHorizontal size={16} strokeWidth={2} />
+            </button>
+            {activeDropdown === 'more' && (
+              <div className="tv-dropdown-menu show u-display-block u-min-width-210px" role="menu">
+                <div className="tv-dropdown-item" id="btn-snapshot" role="menuitem" onClick={() => openModal('snapshot')}>
+                  <Camera size={13} strokeWidth={2} />
+                  <span>Capturer le graphique</span>
+                  <span className="shortcut-hint">P</span>
+                </div>
+                <div className="tv-dropdown-item" id="btn-fullscreen" role="menuitem" onClick={() => void handleToggleFullscreen()}>
+                  {isFullscreen ? <Minimize2 size={13} strokeWidth={2} /> : <Maximize2 size={13} strokeWidth={2} />}
+                  <span>{isFullscreen ? 'Quitter le plein écran' : 'Plein écran'}</span>
+                  <span className="shortcut-hint">F</span>
+                </div>
+                <div className="tv-dropdown-item" id="btn-sound" role="menuitem" onClick={toggleSound}>
+                  {soundEnabled ? <Volume2 size={13} strokeWidth={2} /> : <VolumeX size={13} strokeWidth={2} />}
+                  <span>{soundEnabled ? 'Couper les sons' : 'Activer les sons'}</span>
+                </div>
+                <div className="dropdown-divider" />
+                <div className="tv-dropdown-item" role="menuitem" onClick={() => openModal('shortcuts')}>
+                  <Keyboard size={13} strokeWidth={2} />
+                  <span>Raccourcis clavier</span>
+                  <span className="shortcut-hint">?</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Séparateur large avant Replay */}
@@ -404,332 +454,81 @@ export const Topbar: React.FC = () => {
             id="btn-replay"
             onClick={() => {
               if (isReplayActive || isPicking) {
+                if (isReplayActive && blockRelocationWhileTrading('Quitter le replay')) return;
                 setIsActive(false);
                 setIsPicking(false);
-                showToast('Mode Replay quitté', 'info');
+                showToast('Replay quitté', 'info');
               } else {
+                if (blockRelocationWhileTrading('Démarrer un replay')) return;
                 setIsPicking(true);
-                showToast('Cliquez sur une bougie pour lancer le replay', 'info');
+                showToast('Cliquez sur la bougie où démarrer.', 'info');
               }
             }}
-            title="Mode Replay temporel (Raccourci : Espace)"
+            title="Rejouer l’historique · Espace"
           >
             <History size={16} strokeWidth={2.2} />
+            <span className="replay-btn-label">{isReplayActive || isPicking ? 'Replay' : 'Rejouer'}</span>
           </button>
         </div>
       </div>
       {/* Right group: selectors + import */}
       <div className="topbar-right">
         {/* Timeframe picker */}
-        <div className="tv-dropdown" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div className="tv-dropdown u-display-flex u-align-items-center u-gap-6px">
           <button
-            className="tv-dropdown-btn"
+            className="tv-dropdown-btn u-display-flex u-align-items-center u-gap-5px"
             id="btn-active-tf"
             onClick={() => toggleDropdown('tf')}
-            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
           >
             {downloadingTF ? (
-              <Loader2 size={12} style={{ color: '#38BDF8', animation: 'spin 1s linear infinite' }} />
+              <Loader2 size={12} className="u-color-38bdf8 u-animation-spin-1s-linear-infinite" />
             ) : (
-              <Clock size={12} strokeWidth={2} style={{ color: 'var(--text-secondary)' }} />
+              <Clock size={12} strokeWidth={2} className="u-color-text-secondary" />
             )}
             <span>{currentTFDef.label}</span>
             <ChevronDown size={11} strokeWidth={2.5} />
           </button>
 
           {downloadingTF && (
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '3px 8px',
-                borderRadius: '4px',
-                background: 'rgba(56, 189, 248, 0.15)',
-                border: '1px solid rgba(56, 189, 248, 0.35)',
-                color: '#38BDF8',
-                fontSize: '11px',
-                fontWeight: 600,
-                animation: 'pulse 1.5s infinite',
-              }}
+            <div className="u-display-inline-flex u-align-items-center u-gap-5px u-padding-3px-8px u-border-radius-4px u-background-rgba-56-189-248-0_15 u-border-b057bc u-color-38bdf8 u-font-size-11px u-font-weight-600 u-animation-pulse-1_5s-infinite"
             >
-              <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
+              <Loader2 size={11} className="u-animation-spin-1s-linear-infinite" />
               <span>Chargement {downloadingTF}...</span>
             </div>
           )}
           {activeDropdown === 'tf' && (
-            <div className="tv-dropdown-menu show" style={{ display: 'block', minWidth: '170px' }}>
+            <div className="tv-dropdown-menu show u-display-block u-min-width-170px">
               <div id="tf-group">
                 {TIMEFRAME_DEFS.map((t) => {
-                  const isAvailable = t.s >= baseTF;
+                  // Deux questions différentes, et c'est la seconde qui décide :
+                  //  · « puis-je l'obtenir depuis les bougies chargées ? »
+                  //  · « ce flux remonte-t-il jusqu'à ma date de replay ? »
+                  const isLocal = t.s >= baseTF;
+                  const limit = archiveLimitFor(t.s);
+                  const reach = checkArchiveDepth(t.s, replayCutEpoch);
+                  const outOfReach = !reach.allowed;
+
+                  const hint = outOfReach
+                    ? 'Trop ancien'
+                    : limit
+                      ? `${formatArchiveDepth(limit.maxAgeDays)} d’historique`
+                      : 'Historique complet';
+
                   return (
                     <div
                       key={t.s}
-                      className={`tv-dropdown-item ${t.s === activeTF ? 'active' : ''}`}
-                      onClick={async () => {
-                        // 0. PREVENTATIVE REPLAY ARCHIVE GUARD:
-                        // In 1m, archives only go back 7 days. In 5m-30m, 60 days. In 1h, 2 years.
-                        // Prevent jumping to today or breaking the replay!
-                        const replayState = useReplayStore.getState();
-                        const prevCutTime = replayState.isActive && baseCandles[replayState.currentIndex]?.time
-                          ? baseCandles[replayState.currentIndex].time
-                          : null;
-
-                        if (prevCutTime) {
-                          const nowSec = Math.floor(Date.now() / 1000);
-                          const ageDays = Math.floor((nowSec - prevCutTime) / 86400);
-
-                          if (t.s <= 60 && ageDays > 30) {
-                            closeAllDropdowns();
-                            showToast(
-                              `⚠️ Limite d'archive 1m : les données 1 minute remontent jusqu'aux 30 derniers jours (votre Replay est au ${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')}, il y a ${ageDays} jours). Pour rejouer des dates antérieures, utilisez le 1H/4H (5 ans d'archives) ou 1D (27 ans). Le Replay reste en place.`,
-                              'warning',
-                              6000
-                            );
-                            return;
-                          }
-
-                          if (t.s > 60 && t.s <= 300 && ageDays > 60) {
-                            closeAllDropdowns();
-                            showToast(
-                              `⚠️ Limite d'archive 5m : les flux 5 minutes remontent jusqu'à 60 jours. Pour rejouer cette date, utilisez le 1H/4H (5 ans) ou 1D (27 ans).`,
-                              'warning',
-                              6000
-                            );
-                            return;
-                          }
-
-                          if (t.s > 300 && t.s <= 900 && ageDays > 120) {
-                            closeAllDropdowns();
-                            showToast(
-                              `⚠️ Limite d'archive 15m : les flux 15 minutes remontent jusqu'à 120 jours (4 mois). Pour rejouer cette date, utilisez le 1H/4H (5 ans) ou 1D (27 ans).`,
-                              'warning',
-                              6000
-                            );
-                            return;
-                          }
-
-                          if (t.s > 900 && t.s <= 1800 && ageDays > 240) {
-                            closeAllDropdowns();
-                            showToast(
-                              `⚠️ Limite d'archive 30m : les flux 30 minutes remontent jusqu'à 240 jours (8 mois). Pour rejouer cette date, utilisez le 1H/4H (5 ans) ou 1D (27 ans).`,
-                              'warning',
-                              6000
-                            );
-                            return;
-                          }
-
-                          if (t.s > 1800 && t.s <= 14400 && ageDays > 1825) {
-                            closeAllDropdowns();
-                            showToast(
-                              `⚠️ Limite d'archive ${t.label} : les flux horaires/4h remontent jusqu'à 5 ans. Pour des dates antérieures, utilisez le 1D (27 ans d'historique).`,
-                              'warning',
-                              6000
-                            );
-                            return;
-                          }
-                        }
-
-                        const isMarketPair = ALL_MARKET_PAIRS.some((p) => p.symbol === currentSymbol);
-                        const currentBaseDef = TIMEFRAME_DEFS.find((d) => d.s === baseTF) || { label: '1D' };
-
-                        if (isAvailable) {
-                          // Special guard: ONLY for online market pairs when switching from an intraday web stream back to 27y BCE master daily
-                          if (!isImported && isMarketPair && t.s >= 86400 && baseTF < 86400) {
-                            closeAllDropdowns();
-                            const { restoreDailyDataset } = useMarketStore.getState();
-                            const restored = restoreDailyDataset(t.s);
-                            if (restored) {
-                              const { baseCandles: newDaily } = useMarketStore.getState();
-                              if (prevCutTime) {
-                                const newIdx = newDaily.findIndex((c) => c.time >= prevCutTime);
-                                const snappedIdx = newIdx !== -1 ? newIdx : newDaily.length - 1;
-                                useReplayStore.setState({ isActive: true, currentIndex: snappedIdx, startIndex: snappedIdx });
-                              }
-                              showToast(`🟢 ${currentSymbol} : Historique complet 1D restauré (${newDaily.length.toLocaleString()} bougies - 1999 → 2026)`, 'success', 3000);
-                              return;
-                            }
-
-                            // If not in cache, fetch full multi-decade history
-                            showToast(`Restauration de l'historique complet 1D pour ${currentSymbol}...`, 'info', 2500);
-                            try {
-                              const dailyCandles = await fetchHistoricalData(currentSymbol, '1d', 'max');
-                              if (dailyCandles && dailyCandles.length > 500) {
-                                setBaseCandles(dailyCandles, 86400, false);
-                                setTimeframe(t.s);
-                                if (prevCutTime) {
-                                  const newIdx = dailyCandles.findIndex((c) => c.time >= prevCutTime);
-                                  const snappedIdx = newIdx !== -1 ? newIdx : dailyCandles.length - 1;
-                                  useReplayStore.setState({ isActive: true, currentIndex: snappedIdx, startIndex: snappedIdx });
-                                }
-                                showToast(`🟢 ${currentSymbol} : ${dailyCandles.length.toLocaleString()} bougies 1D restaurées (27 ans d'historique)`, 'success', 3500);
-                              }
-                            } catch (err) {
-                              console.warn('Failed to restore daily dataset:', err);
-                            }
-                            return;
-                          }
-
-                          // For imported files or upward aggregation: NEVER overwrite baseCandles!
-                          // baseCandles remains the pristine original resolution (e.g. H1), and displayCandles aggregates cleanly!
-                          setTimeframe(t.s);
-                          closeAllDropdowns();
-                          if (replayState.isActive) {
-                            showToast(`Timeframe : ${t.label} (Replay actif — Cliquez sur "Quitter" pour voir toutes les bougies)`, 'info', 3000);
-                          } else {
-                            showToast(`Timeframe : ${t.label}`, 'info', 1500);
-                          }
-                          return;
-                        }
-
-                        if (!isMarketPair) {
-                          closeAllDropdowns();
-                          showToast(
-                            `⚠️ Timeframe ${t.label} indisponible : ce fichier importé (${currentSymbol}) a une base fixe en ${currentBaseDef.label}. Impossible de descendre sous la résolution du fichier.`,
-                            'warning',
-                            4500
-                          );
-                          return;
-                        }
-
-                        // 2. Online Market Pair: download anchored at exact replay moment if replay is active
-                        const tfCode =
-                          t.s <= 60 ? '1m' :
-                          t.s <= 300 ? '5m' :
-                          t.s <= 900 ? '15m' :
-                          t.s <= 1800 ? '30m' :
-                          t.s <= 3600 ? '1h' :
-                          t.s <= 14400 ? '4h' : '1d';
-
-                        closeAllDropdowns();
-                        setDownloadingTF(t.label);
-
-                        if (t.s <= 60) {
-                          showToast(
-                            `⏳ Téléchargement du flux 1 minute (1m) pour ${currentSymbol} en cours... (~7 000 barres réelles)`,
-                            'info',
-                            5000
-                          );
-                        } else {
-                          showToast(
-                            prevCutTime
-                              ? `⏳ Recherche ${t.label} au moment précis du Replay (${new Date(prevCutTime * 1000).toLocaleDateString('fr-FR')})...`
-                              : `⏳ Téléchargement de ${currentSymbol} en ${t.label}...`,
-                            'info',
-                            3000
-                          );
-                        }
-
-                        try {
-                          const candles = await fetchHistoricalData(currentSymbol, tfCode, 'max', prevCutTime || undefined);
-                          if (!candles || candles.length === 0) {
-                            setDownloadingTF(null);
-                            showToast(`⚠️ Données ${t.label} indisponibles pour ${currentSymbol}`, 'warning', 3000);
-                            return;
-                          }
-
-                          // If in replay, verify if the downloaded candles cover the replay cut date with enough past context
-                          if (prevCutTime) {
-                            const firstTime = candles[0].time;
-                            const lastTime = candles[candles.length - 1].time;
-                            const cutDateStr = new Date(prevCutTime * 1000).toLocaleDateString('fr-FR');
-                            const firstDateStr = new Date(firstTime * 1000).toLocaleDateString('fr-FR');
-
-                            if (prevCutTime < firstTime) {
-                              setDownloadingTF(null);
-                              showToast(
-                                `⚠️ Archives intrajournalières insuffisantes : le flux ${t.label} de ${currentSymbol} démarre le ${firstDateStr}. Impossible de rejouer en ${t.label} au ${cutDateStr}. Le Replay reste en ${currentTFDef.label} (27 ans d'historique).`,
-                                'warning',
-                                6000
-                              );
-                              return;
-                            }
-
-                            if (prevCutTime > lastTime) {
-                              setDownloadingTF(null);
-                              showToast(
-                                `⚠️ Le flux ${t.label} s'arrête le ${new Date(lastTime * 1000).toLocaleDateString('fr-FR')}. Le Replay reste en ${currentTFDef.label}.`,
-                                'warning',
-                                5000
-                              );
-                              return;
-                            }
-
-                            const newIdx = candles.findIndex((c) => c.time >= prevCutTime);
-                            if (newIdx < 15) {
-                              setDownloadingTF(null);
-                              showToast(
-                                `⚠️ Historique insuffisant avant le ${cutDateStr} en ${t.label} (seulement ${newIdx} bougies). Le Replay reste en ${currentTFDef.label}.`,
-                                'warning',
-                                5000
-                              );
-                              return;
-                            }
-
-                            const detectedTF = detectBaseTF(candles);
-                            setBaseCandles(candles, detectedTF);
-                            setTimeframe(t.s >= detectedTF ? t.s : detectedTF);
-
-                            useReplayStore.setState({
-                              isActive: true,
-                              currentIndex: newIdx,
-                              startIndex: newIdx,
-                            });
-
-                            setDownloadingTF(null);
-                            showToast(
-                              `🟢 ${currentSymbol} (${t.label}) : synchronisé au moment précis du Replay (${cutDateStr}) !`,
-                              'success',
-                              3500
-                            );
-                            return;
-                          }
-
-                          const detectedTF = detectBaseTF(candles);
-                          setBaseCandles(candles, detectedTF);
-                          setTimeframe(t.s >= detectedTF ? t.s : detectedTF);
-
-                          setDownloadingTF(null);
-                          showToast(
-                            t.s <= 60
-                              ? `🟢 Flux 1 minute (1m) prêt : ${candles.length.toLocaleString()} barres réelles chargées pour ${currentSymbol} !`
-                              : `🟢 ${currentSymbol} (${t.label}) : ${candles.length.toLocaleString()} barres prêtes pour le Replay`,
-                            'success',
-                            4000
-                          );
-                        } catch (err) {
-                          setDownloadingTF(null);
-                          console.warn('Dynamic TF download error:', err);
-                          showToast(`Erreur lors du téléchargement en ${t.label}`, 'error', 3000);
-                        }
-                      }}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        cursor: 'pointer',
-                        opacity: isAvailable ? 1 : 0.9,
-                      }}
+                      className={`tv-dropdown-item tf-option ${t.s === activeTF ? 'active' : ''} ${outOfReach ? 'unreachable' : ''}`}
+                      onClick={() => void selectTimeframe(t)}
+                      title={
+                        outOfReach
+                          ? `Ce flux ne remonte pas jusqu’au ${new Date((replayCutEpoch ?? 0) * 1000).toLocaleDateString('fr-FR')}.`
+                          : isLocal
+                            ? 'Calculé depuis les bougies déjà chargées'
+                            : 'Nécessite un téléchargement'
+                      }
                     >
-                      <span style={{ fontWeight: isAvailable ? 600 : 400 }}>{t.label}</span>
-                      <span
-                        style={{
-                          fontSize: '9px',
-                          color: isAvailable ? '#9CA3AF' : '#60A5FA',
-                          background: isAvailable ? 'transparent' : 'rgba(59, 130, 246, 0.15)',
-                          border: isAvailable ? 'none' : '1px solid rgba(59, 130, 246, 0.3)',
-                          borderRadius: '3px',
-                          padding: '1px 5px',
-                          fontWeight: 500,
-                        }}
-                      >
-                        {t.s <= 60 ? 'Archive 30j' :
-                         t.s <= 300 ? 'Archive 60j' :
-                         t.s <= 900 ? 'Archive 120j' :
-                         t.s <= 1800 ? 'Archive 240j' :
-                         t.s <= 14400 ? 'Archive 5 ans' :
-                         '27 ans (BCE)'}
-                      </span>
+                      <span className="tf-option-label">{t.label}</span>
+                      <span className={`tf-option-hint ${outOfReach ? 'is-blocked' : ''}`}>{hint}</span>
                     </div>
                   );
                 })}
@@ -741,15 +540,14 @@ export const Topbar: React.FC = () => {
         {/* Chart type */}
         <div className="tv-dropdown">
           <button
-            className="tv-dropdown-btn"
+            className="tv-dropdown-btn u-display-flex u-align-items-center u-gap-6px"
             id="btn-active-ctype"
             onClick={() => toggleDropdown('ctype')}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            {chartType === 'Candlestick' && <CandlestickChart size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
-            {chartType === 'Bar' && <BarChart2 size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
-            {chartType === 'Line' && <LineChart size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
-            {chartType === 'Area' && <AreaChart size={13} strokeWidth={2} style={{ color: '#3B82F6' }} />}
+            {chartType === 'Candlestick' && <CandlestickChart size={13} strokeWidth={2} className="u-color-3b82f6" />}
+            {chartType === 'Bar' && <BarChart2 size={13} strokeWidth={2} className="u-color-3b82f6" />}
+            {chartType === 'Line' && <LineChart size={13} strokeWidth={2} className="u-color-3b82f6" />}
+            {chartType === 'Area' && <AreaChart size={13} strokeWidth={2} className="u-color-3b82f6" />}
             <span>
               {chartType === 'Candlestick'
                 ? 'Chandeliers'
@@ -762,7 +560,7 @@ export const Topbar: React.FC = () => {
             <ChevronDown size={11} strokeWidth={2.5} />
           </button>
           {activeDropdown === 'ctype' && (
-            <div className="tv-dropdown-menu show" style={{ display: 'block', minWidth: '150px' }}>
+            <div className="tv-dropdown-menu show u-display-block u-min-width-150px">
               {[
                 { type: 'Candlestick' as const, label: 'Chandeliers', icon: <CandlestickChart size={13} strokeWidth={2} /> },
                 { type: 'Bar' as const, label: 'Barres', icon: <BarChart2 size={13} strokeWidth={2} /> },
@@ -771,12 +569,11 @@ export const Topbar: React.FC = () => {
               ].map((item) => (
                 <div
                   key={item.type}
-                  className={`tv-dropdown-item ${chartType === item.type ? 'active' : ''}`}
+                  className={`tv-dropdown-item ${chartType === item.type ? 'active' : ''} u-display-flex u-align-items-center u-gap-8px`}
                   onClick={() => {
                     setChartType(item.type);
                     closeAllDropdowns();
                   }}
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
                 >
                   <span style={{ display: 'inline-flex', alignItems: 'center', color: chartType === item.type ? '#3B82F6' : 'inherit' }}>
                     {item.icon}
@@ -791,31 +588,22 @@ export const Topbar: React.FC = () => {
         {/* Indicators */}
         <div className="tv-dropdown">
           <button
-            className="tv-dropdown-btn"
+            className="tv-dropdown-btn u-display-flex u-align-items-center u-gap-6px"
             id="btn-indicators"
             onClick={() => toggleDropdown('indicators')}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
             <SlidersHorizontal size={13} strokeWidth={2} style={{ color: activeIndicators.length > 0 ? '#3B82F6' : 'inherit' }} />
             <span>Indicateurs</span>
             {activeIndicators.length > 0 && (
-              <span style={{
-                background: 'rgba(59, 130, 246, 0.2)',
-                color: '#60A5FA',
-                fontSize: '10px',
-                fontWeight: 700,
-                padding: '1px 5px',
-                borderRadius: '10px',
-                border: '1px solid rgba(59, 130, 246, 0.35)',
-              }}>
+              <span className="u-background-rgba-59-130-246-0_2 u-color-60a5fa u-font-size-10px u-font-weight-700 u-padding-1px-5px u-border-radius-10px u-border-39cd06">
                 {activeIndicators.length}
               </span>
             )}
             <ChevronDown size={11} strokeWidth={2.5} />
           </button>
           {activeDropdown === 'indicators' && (
-            <div className="tv-dropdown-menu show" style={{ minWidth: '240px', display: 'block', padding: '6px' }}>
-              <div className="dropdown-section-label" style={{ color: '#3B82F6', fontWeight: 700, padding: '4px 8px', fontSize: '10.5px', letterSpacing: '0.8px' }}>
+            <div className="tv-dropdown-menu show u-min-width-240px u-display-block u-padding-6px">
+              <div className="dropdown-section-label u-color-3b82f6 u-font-weight-700 u-padding-4px-8px u-font-size-10_5px u-letter-spacing-0_8px">
                 TENDANCE
               </div>
               {[
@@ -826,21 +614,20 @@ export const Topbar: React.FC = () => {
               ].map((ind) => (
                 <div
                   key={ind.type}
-                  className="tv-dropdown-item"
+                  className="tv-dropdown-item u-display-flex u-flex-direction-column u-align-items-flex-start u-padding-6px-8px"
                   onClick={() => {
                     setSelectedIndicatorType(ind.type as any);
                     closeAllDropdowns();
                     openModal('indicator-config');
                   }}
-                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '6px 8px' }}
                 >
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ind.label}</span>
-                  <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{ind.desc}</span>
+                  <span className="u-font-weight-600 u-color-text-primary">{ind.label}</span>
+                  <span className="u-font-size-10_5px u-color-text-muted">{ind.desc}</span>
                 </div>
               ))}
 
-              <div className="dropdown-divider" style={{ margin: '6px 0' }} />
-              <div className="dropdown-section-label" style={{ color: '#A78BFA', fontWeight: 700, padding: '4px 8px', fontSize: '10.5px', letterSpacing: '0.8px' }}>
+              <div className="dropdown-divider u-margin-6px-0" />
+              <div className="dropdown-section-label u-color-a78bfa u-font-weight-700 u-padding-4px-8px u-font-size-10_5px u-letter-spacing-0_8px">
                 OSCILLATEURS
               </div>
               {[
@@ -849,34 +636,32 @@ export const Topbar: React.FC = () => {
               ].map((ind) => (
                 <div
                   key={ind.type}
-                  className="tv-dropdown-item"
+                  className="tv-dropdown-item u-display-flex u-flex-direction-column u-align-items-flex-start u-padding-6px-8px"
                   onClick={() => {
                     setSelectedIndicatorType(ind.type as any);
                     closeAllDropdowns();
                     openModal('indicator-config');
                   }}
-                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '6px 8px' }}
                 >
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ind.label}</span>
-                  <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{ind.desc}</span>
+                  <span className="u-font-weight-600 u-color-text-primary">{ind.label}</span>
+                  <span className="u-font-size-10_5px u-color-text-muted">{ind.desc}</span>
                 </div>
               ))}
 
-              <div className="dropdown-divider" style={{ margin: '6px 0' }} />
-              <div className="dropdown-section-label" style={{ padding: '4px 8px', fontSize: '10px' }}>INDICATEURS ACTIFS</div>
+              <div className="dropdown-divider u-margin-6px-0" />
+              <div className="dropdown-section-label u-padding-4px-8px u-font-size-10px">Indicateurs actifs</div>
               <div id="active-indicators-list">
                 {activeIndicators.length === 0 ? (
-                  <div style={{ padding: '6px 8px', fontSize: '11.5px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  <div className="u-padding-6px-8px u-font-size-11_5px u-color-text-muted u-font-style-italic">
                     Aucun indicateur actif
                   </div>
                 ) : (
                   activeIndicators.map((i) => (
-                    <div key={i.id} className="active-ind-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.04)', marginBottom: '3px' }}>
+                    <div key={i.id} className="active-ind-item u-display-flex u-justify-content-space-between u-align-items-center u-padding-4px-8px u-border-radius-4px u-background-rgba-255-255-255-0_04 u-margin-bottom-3px">
                       <span style={{ fontSize: '11.5px', fontWeight: 600, color: i.color }}>{i.type} ({i.period})</span>
                       <button
                         onClick={(e) => { e.stopPropagation(); removeIndicator(i.id); }}
-                        title="Supprimer cet indicateur"
-                        style={{ background: 'none', border: 'none', color: '#F43F5E', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                        title="Retirer cet indicateur" className="u-background-none u-border-none u-color-f43f5e u-cursor-pointer u-display-flex u-align-items-center"
                       >
                         <Trash2 size={12} strokeWidth={2} />
                       </button>
@@ -889,10 +674,46 @@ export const Topbar: React.FC = () => {
         </div>
 
         {/* Import button */}
-        <button id="upload-btn" onClick={() => openModal('import')} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <UploadCloud size={14} strokeWidth={2.2} />
-          <span>Importer</span>
-        </button>
+        {/* Porte unique : les quatre entrées concurrentes (fichier, marchés,
+            sauvegardes, démo) partagent enfin un seul point de départ. */}
+        <div className="tv-dropdown u-position-relative">
+          <button
+            id="upload-btn"
+            onClick={() => toggleDropdown('data')}
+            aria-haspopup="menu"
+            aria-expanded={activeDropdown === 'data'} className="u-display-flex u-align-items-center u-gap-6px"
+          >
+            <Database size={14} strokeWidth={2.2} />
+            <span>Données</span>
+            <ChevronDown size={11} strokeWidth={2.4} />
+          </button>
+          {activeDropdown === 'data' && (
+            <div
+              className="tv-dropdown-menu show u-display-block u-min-width-250px u-right-0 u-left-auto"
+              role="menu"
+            >
+              <div className="dropdown-section-label">Charger</div>
+              <div className="tv-dropdown-item" role="menuitem" onClick={() => openModal('live')}>
+                <Globe size={13} strokeWidth={2} className="u-color-34d399" />
+                <span>Choisir un instrument</span>
+              </div>
+              <div className="tv-dropdown-item" role="menuitem" onClick={() => openModal('import')}>
+                <UploadCloud size={13} strokeWidth={2} className="u-color-38bdf8" />
+                <span>Importer un fichier</span>
+              </div>
+              <div className="dropdown-divider" />
+              <div className="dropdown-section-label">Reprendre</div>
+              <div className="tv-dropdown-item" role="menuitem" onClick={() => openModal('datasets')}>
+                <Database size={13} strokeWidth={2} className="u-color-a78bfa" />
+                <span>Sauvegardes et jeux de données</span>
+              </div>
+              <div className="tv-dropdown-item" role="menuitem" onClick={() => openModal('trade-history')}>
+                <BookOpen size={13} strokeWidth={2} className="u-color-fbbf24" />
+                <span>Journal de trades</span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

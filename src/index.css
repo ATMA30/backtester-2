@@ -13,6 +13,9 @@
    DESIGN TOKENS
 ══════════════════════════════════════════════════════════════════ */
 :root {
+  /* Hauteur de la barre d'état. Référencée par #statusbar et par l'ancrage
+     de la barre de replay : une seule valeur, pas deux copies à resynchroniser. */
+  --statusbar-h: 23px;
   /* Surfaces — Deep Slate & Layered Glassmorphism */
   --bg-base:       #0B0E14; /* Deep Slate Background */
   --bg-surface:    #111520; /* Slate Panel */
@@ -37,6 +40,10 @@
   /* Accent & Utility */
   --accent:        #3B82F6;
   --accent-hover:  #60A5FA;
+  /* Référencé par `.btn-sm.btn-primary`, le focus visible et les bordures
+     actives, mais jamais déclaré : aucun bouton primaire n'était coloré. */
+  --primary:       #2563EB;
+  --primary-hover: #3B82F6;
   --accent-dim:    rgba(59, 130, 246, 0.12);
   --accent-glow:   rgba(59, 130, 246, 0.22);
   --accent-border: rgba(59, 130, 246, 0.40);
@@ -883,7 +890,10 @@ html, body {
 }
 
 body.replay-active #tv-chart {
-  height: calc(100% - 70px);
+  /* Hauteur réelle de la barre, publiée par ReplayBar, plus son décollement du
+     bas. Le 70px en dur ne suivait plus la barre dès que la ligne d'aide des
+     ordres passait à la ligne. */
+  height: calc(100% - var(--replay-bar-h, 70px) - 16px);
 }
 
 /* Drawing canvas */
@@ -1107,7 +1117,7 @@ body.replay-active #tv-chart {
    STATUS BAR
 ══════════════════════════════════════════════════════════════════ */
 #statusbar {
-  height: 23px;
+  height: var(--statusbar-h);
   background: var(--bg-surface);
   border-top: 1px solid var(--border);
   display: flex;
@@ -1148,6 +1158,19 @@ body.replay-active #tv-chart {
 }
 
 .status-dot.yellow {
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--gold-dim);
+}
+
+/* Real market data loaded. `.online` was referenced by the status bar but never
+   defined, so the dot stayed muted grey whatever the state. */
+.status-dot.online {
+  background: var(--bull);
+  box-shadow: 0 0 6px var(--bull-glow);
+}
+
+/* Locally generated series — must not be mistaken for market data. */
+.status-dot.simulated {
   background: var(--gold);
   box-shadow: 0 0 6px var(--gold-dim);
 }
@@ -1333,7 +1356,13 @@ body.replay-active #tv-chart {
 /* ══════════════════════════════════════════════════════════════════
    MODAL
 ══════════════════════════════════════════════════════════════════ */
-#modal-overlay {
+/* Ces règles étaient adressées par `id`, si bien que deux boîtes de dialogue
+   pouvant s'afficher en même temps — l'import et le diagnostic de couverture —
+   portaient toutes deux `id="modal-overlay"` et `id="modal"`. Un identifiant
+   dupliqué casse `getElementById`, les cibles `aria-*` et tout sélecteur de
+   test. Les mêmes styles sont désormais disponibles comme classes. */
+#modal-overlay,
+.modal-overlay {
   position: fixed;
   inset: 0;
   z-index: 200;
@@ -1345,7 +1374,8 @@ body.replay-active #tv-chart {
   justify-content: center;
 }
 
-#modal-overlay.open {
+#modal-overlay.open,
+.modal-overlay.open {
   display: flex;
   animation: overlayReveal 0.2s var(--ease-out) both;
 }
@@ -1355,7 +1385,8 @@ body.replay-active #tv-chart {
   to   { opacity: 1; }
 }
 
-#modal {
+#modal,
+.modal-box {
   background: var(--bg-glass-card);
   backdrop-filter: blur(36px) saturate(200%);
   -webkit-backdrop-filter: blur(36px) saturate(200%);
@@ -1364,6 +1395,11 @@ body.replay-active #tv-chart {
   padding: 28px;
   width: 520px;
   max-width: 95vw;
+  /* L'aperçu d'import a allongé la boîte : sur un écran de 676 px le bouton
+     « Importer » tombait hors de la fenêtre, sans défilement possible. */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   box-shadow:
     var(--shadow-xl),
     0 0 0 1px rgba(255, 255, 255, 0.04) inset;
@@ -1573,8 +1609,13 @@ body.replay-active #tv-chart {
 ══════════════════════════════════════════════════════════════════ */
 #replay-bar {
   display: none;
-  position: absolute;
-  bottom: 14px;
+  /* `fixed`, pas `absolute` : ancrée au bas de la fenêtre, elle ne dépend plus
+     de la hauteur du document ni d'un éventuel défilement. */
+  position: fixed;
+  /* Ancrée au-dessus de la barre d'état : à `bottom: 14px` elle recouvrait la
+     ligne source / nombre de bougies / plage de dates, qui fait exactement
+     --statusbar-h de haut. */
+  bottom: calc(var(--statusbar-h) + 12px);
   left: 50%;
   transform: translateX(-50%);
   background: rgba(15, 23, 42, 0.92);
@@ -1585,13 +1626,40 @@ body.replay-active #tv-chart {
   padding: 6px 14px;
   gap: 12px;
   align-items: center;
+  /* Le commentaire ci-dessous promettait l'enroulement, mais rien ne le
+     permettait : en `nowrap`, avec une position ouverte, la barre débordait de
+     140 px à 1200 px de large et « Fermer » sortait de l'écran. Elle passe
+     désormais à la ligne ; sa hauteur réelle est publiée au graphique
+     (`--replay-bar-h`), qui se réduit d'autant. */
+  flex-wrap: wrap;
+  row-gap: 6px;
+  justify-content: center;
   z-index: 80;
   box-shadow:
     0 12px 36px rgba(0, 0, 0, 0.55),
     0 0 0 1px rgba(255, 255, 255, 0.05) inset;
-  max-width: calc(100vw - 32px);
+  /* Largeur *définie*, pas un simple plafond. Avec `max-width` + `overflow-x`,
+     le contenu prenait sa largeur `max-content` : sous ~1150 px la barre cessait
+     de passer à la ligne et débordait de 200 px, Acheter / Vendre hors écran.
+     Une largeur définie donne aux enfants une référence contre laquelle
+     rétrécir, et l'enroulement devient identique à toutes les tailles. */
+  width: min(calc(100vw - 32px), 1600px);
+  /* Elle ne peut plus dépasser la place entre l'en-tête et la barre d'état :
+     au pire elle défile en interne, jamais elle n'est rognée par la fenêtre. */
+  max-height: calc(100vh - 48px - var(--statusbar-h) - 24px);
   user-select: none;
   animation: replayBarSlideUp 0.25s var(--ease-spring) both;
+  /* Filet de sécurité conservé : si le contenu incompressible dépasse malgré
+     tout, la barre défile plutôt que de rogner un bouton d'exécution. */
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+#replay-bar::-webkit-scrollbar { height: 4px; }
+#replay-bar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
 }
 
 @keyframes replayBarSlideUp {
@@ -1810,18 +1878,10 @@ body.replay-active #tv-chart {
   color: #F43F5E;
 }
 
-#rr-badge {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 3px 6px;
-  border-radius: 4px;
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.25);
-  color: #60A5FA;
-  font-feature-settings: 'tnum';
-  white-space: nowrap;
-}
+/* Un second bloc `#rr-badge` existait ici. Deux déclarations du même
+   identifiant se mélangent propriété par propriété selon l'ordre du fichier :
+   celle-ci fournissait la couleur et le fond, celle plus bas le `display` et la
+   bordure. Une seule source (voir « REPLAY BAR », plus bas). */
 
 .rp-pending-orders-btn {
   background: rgba(56, 189, 248, 0.12);
@@ -1848,14 +1908,74 @@ body.replay-active #tv-chart {
 /* ── BLOCK 3: SAISIE D'ORDRES STRUCTURÉE ── */
 .rp-order-grid {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  /* `min-width: 0` est indispensable : sans lui la ligne d'aide impose sa
+     largeur intrinsèque au conteneur et pousse Acheter / Vendre hors écran. */
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: visible;
+}
+
+.rp-order-row {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Les règles de saisie, sorties des attributs `title` : une infobulle est
+   invisible au tactile et lente à la souris, or ces règles décident du stop. */
+.rp-order-hints {
+  display: flex;
+  /* `align-items: flex-start` du parent donne à cet enfant sa largeur
+     `max-content` : il rendait 714 px dans un conteneur de 462 px et débordait
+     de la barre, texte coupé au bord de l'écran. `align-self: stretch` le
+     ramène à la largeur du parent — c'est seulement là que son `overflow`
+     sert à quelque chose. */
+  align-self: stretch;
+  /* Les aides passent à la ligne plutôt que de se tronquer : trois fragments
+     coupés par une ellipse n'aident personne. La hauteur de la barre est
+     mesurée, la mise en page suit. */
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-muted);
+  padding-left: 2px;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* L'aide se tronque plutôt que d'élargir la barre ; la syntaxe reste dans les
+   placeholders, qui eux ne se tronquent pas. */
+.rp-order-hints > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-order-hints strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.rp-order-hints .derived {
+  color: #60A5FA;
+}
+
+/* L'aide n'est masquée qu'aux largeurs où elle ne tiendrait plus ; les
+   placeholders portent alors seuls la syntaxe. */
+@media (max-width: 1180px) {
+  .rp-order-hints { display: none; }
 }
 
 .rp-input-subgroup {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .rp-sl-tp-subgroup {
@@ -1878,14 +1998,15 @@ body.replay-active #tv-chart {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Aucun champ ne se laisse comprimer : seule l'aide se tronque. */
+  flex-shrink: 0;
 }
 
 .rp-input-label {
-  font-size: 7.5px;
-  color: #64748B;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 9.5px;
+  color: #7C879B;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
@@ -1913,6 +2034,25 @@ body.replay-active #tv-chart {
   font-variant-numeric: tabular-nums;
 }
 
+/* Les champs de prix portent la syntaxe acceptée dans leur placeholder
+   (« prix, 30p ou 1,5 % ») : tronquée, elle ne sert à rien. */
+#trade-entry,
+#trade-sl,
+#trade-tp {
+  width: 96px;
+  flex-shrink: 0;
+}
+
+#trade-risk-pct,
+#trade-qty {
+  width: 56px;
+}
+
+.rp-input-box input::placeholder {
+  color: #6B7689;
+  opacity: 1;
+}
+
 .rp-input-box input:focus {
   background: rgba(255, 255, 255, 0.07);
   border-color: rgba(59, 130, 246, 0.5);
@@ -1930,6 +2070,8 @@ body.replay-active #tv-chart {
   gap: 4px;
   align-items: center;
   margin-left: 2px;
+  /* Acheter et Vendre ne quittent jamais l'écran. */
+  flex-shrink: 0;
 }
 
 .trade-btn {
@@ -1937,12 +2079,11 @@ body.replay-active #tv-chart {
   padding: 0 10px;
   border-radius: 4px;
   border: none;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 11.5px;
+  font-weight: 600;
   font-family: var(--font);
   cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
   transition: all 0.12s ease;
   display: flex;
   align-items: center;
@@ -2217,16 +2358,26 @@ body.replay-active #tv-chart {
   border: 1px solid var(--border-light);
   box-shadow: var(--shadow-lg);
   pointer-events: all;
-  transform: translateX(calc(100% + 24px));
-  opacity: 0;
-  transition: transform 0.32s var(--ease-out), opacity 0.32s var(--ease-out);
   overflow: hidden;
   position: relative;
+  /* Une `transition` depuis `opacity: 0` exige un changement de classe APRÈS le
+     montage. Le modificateur prévu pour cela — `.toast-show` — n'était appliqué
+     par aucun composant, donc chaque toast restait à `opacity: 0`, décalé hors
+     de l'écran : les 78 appels à `showToast` du projet ne produisaient rien.
+     Une `animation` se déclenche au montage, sans état à piloter côté React. */
+  animation: toastIn 0.32s var(--ease-out) both;
 }
 
-.toast.toast-show {
-  transform: translateX(0);
-  opacity: 1;
+@keyframes toastIn {
+  from { transform: translateX(calc(100% + 24px)); opacity: 0; }
+  to   { transform: translateX(0);                 opacity: 1; }
+}
+
+/* Les toasts apparaissent sans prévenir, en marge du regard : c'est exactement
+   le mouvement qu'un réglage « moins d'animations » veut voir disparaître. */
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+  .toast-progress { animation: none !important; }
 }
 
 .toast-icon {
@@ -2267,24 +2418,29 @@ body.replay-active #tv-chart {
   bottom: 0; left: 0;
   height: 2px; width: 100%;
   transform-origin: left;
+  /* La durée vient du toast lui-même. Les quatre valeurs codées en dur (4 s,
+     5 s, 4 s, 3,5 s) ne correspondaient à aucune durée réelle : les appelants
+     passent de 2 000 à 8 000 ms, donc la barre finissait sa course bien avant
+     la disparition, ou restait pleine au moment où le toast s'effaçait. */
+  animation: toastProg var(--toast-duration, 3000ms) linear forwards;
 }
 @keyframes toastProg { from{transform:scaleX(1)} to{transform:scaleX(0)} }
 
 .toast-success { border-left: 3px solid var(--bull); }
 .toast-success .toast-icon { color: var(--bull); }
-.toast-success .toast-progress { background: var(--bull); animation: toastProg 4s linear forwards; }
+.toast-success .toast-progress { background: var(--bull); }
 
 .toast-error { border-left: 3px solid var(--bear); }
 .toast-error .toast-icon { color: var(--bear); }
-.toast-error .toast-progress { background: var(--bear); animation: toastProg 5s linear forwards; }
+.toast-error .toast-progress { background: var(--bear); }
 
 .toast-warning { border-left: 3px solid var(--gold); }
 .toast-warning .toast-icon { color: var(--gold); }
-.toast-warning .toast-progress { background: var(--gold); animation: toastProg 4s linear forwards; }
+.toast-warning .toast-progress { background: var(--gold); }
 
 .toast-info { border-left: 3px solid var(--accent); }
 .toast-info .toast-icon { color: var(--accent); }
-.toast-info .toast-progress { background: var(--accent); animation: toastProg 3.5s linear forwards; }
+.toast-info .toast-progress { background: var(--accent); }
 
 /* ══════════════════════════════════════════════════════════════════
    INDICATOR CONFIG MODAL
@@ -3001,7 +3157,9 @@ kbd {
   display: flex;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.78);
+  /* 0.78 masquait complètement le graphique : le trader perdait son contexte
+     de travail le temps de la modale. */
+  background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   z-index: 9999;
@@ -3018,8 +3176,8 @@ kbd {
 
 .custom-modal-box {
   background: var(--bg-surface);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6);
   width: 90%;
   max-width: 520px;
@@ -3208,3 +3366,1300 @@ kbd {
   border: 1px solid var(--border);
   box-shadow: 0 8px 24px rgba(0,0,0,0.5);
 }
+
+/* ── Bouton Replay libellé ─────────────────────────────────────
+   La fonction signature du produit occupait le même carré anonyme de 28 px
+   que le réglage du son. Un libellé la sort de la rangée d'icônes. */
+#btn-replay.replay-btn-prominent {
+  width: auto;
+  gap: 6px;
+  padding: 0 11px 0 9px;
+}
+
+.replay-btn-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* Raccourci aligné à droite dans les menus déroulants. */
+.tv-dropdown-item .shortcut-hint {
+  margin-left: auto;
+  font-family: var(--mono, 'JetBrains Mono', monospace);
+  font-size: 10px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ── Sélecteur d'unité de temps ────────────────────────────────
+   Le badge répondait « Archive 30j » — une durée sans sujet. Il répond
+   maintenant à la vraie question : jusqu'où ce flux remonte-t-il, et
+   atteint-il la date où mon replay est arrêté ? */
+.tv-dropdown-item.tf-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  cursor: pointer;
+}
+
+.tf-option-label {
+  font-weight: 600;
+}
+
+.tf-option-hint {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tf-option-hint.is-blocked {
+  color: #FB923C;
+}
+
+/* Hors de portée du replay en cours : le clic reste possible mais échouera
+   avec un message — on le signale avant, pas après. */
+.tv-dropdown-item.tf-option.unreachable .tf-option-label {
+  opacity: 0.45;
+  font-weight: 400;
+}
+
+/* ── Choix d'instrument ────────────────────────────────────────
+   Les deux menus étaient nus, distingués par leur seule infobulle, et la
+   bannière d'aide était statique : elle vantait « 1H ou 15 Min » quelle que
+   soit la sélection réelle. */
+.lm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lm-field-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.lm-select {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 7px 8px;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+}
+
+.lm-select.accent {
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #60A5FA;
+  font-weight: 600;
+}
+
+.lm-coverage {
+  background: rgba(59, 130, 246, 0.07);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Le plafond n'est pas une erreur : c'est une limite de la source, signalée
+   avant le téléchargement plutôt que découverte après. */
+.lm-coverage.is-capped {
+  background: rgba(251, 146, 60, 0.07);
+  border-color: rgba(251, 146, 60, 0.24);
+}
+
+.lm-coverage-main {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.lm-coverage.is-capped .lm-coverage-main strong {
+  color: #FDBA74;
+}
+
+.lm-coverage-cap {
+  color: #FB923C;
+}
+
+.lm-coverage-sub {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+/* Contrôle sans objet pour la source courante : visiblement inerte plutôt que
+   silencieusement sans effet (la BCE et les synthétiques Deriv ne publient
+   aucun volume). */
+.tv-icon-btn.unavailable,
+.tv-icon-btn:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.tv-icon-btn.unavailable:hover,
+.tv-icon-btn:disabled:hover {
+  background: transparent;
+  color: inherit;
+}
+
+/* ══ Modales : contrôle segmenté, actions, état vide ══════════ */
+
+/* 1. Onglets — l'onglet actif ressemblait à une touche de clavier enfoncée,
+   avec une bordure dure. Une capsule dans un rail commun se lit mieux. */
+.seg-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.seg-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+
+.seg-tab:hover {
+  color: var(--text-primary);
+}
+
+.seg-tab.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.seg-tab:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* Le compteur sort du libellé : deux informations, deux niveaux de lecture. */
+.seg-tab-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.seg-tab.is-active .seg-tab-count {
+  background: rgba(255, 255, 255, 0.13);
+  color: var(--text-secondary);
+}
+
+/* 2. Barre d'actions : une seule ligne, alignée à droite. */
+.modal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+/* Secondaire : présent sans concurrencer l'action principale. */
+.btn-sm.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-sm.btn-ghost:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+/* 3. État vide — le cadre en pointillés alourdissait la vue pour ne rien
+   délimiter d'utile ; l'action attendue descend sous le texte. */
+.modal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 40px 24px 44px;
+}
+
+.modal-empty-icon {
+  opacity: 0.4;
+}
+
+.modal-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-empty-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  max-width: 46ch;
+}
+
+.modal-empty .btn-sm {
+  margin-top: 4px;
+}
+
+/* ── Séances indisponibles hors intraday ───────────────────────
+   Les cases restaient cochables et ne produisaient rien : le menu affichait
+   une note, mais rien n'empêchait de cocher dans le vide. */
+.sessions-unavailable .forex-session-row {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.sessions-unavailable .sep-menu-title {
+  opacity: 0.5;
+}
+
+.sessions-notice {
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: #7DD3FC;
+  line-height: 1.45;
+}
+
+.sessions-notice strong {
+  color: #38BDF8;
+  font-weight: 600;
+}
+
+/* ── Import en flux ────────────────────────────────────────────
+   Un CSV de plusieurs centaines de Mo prend plusieurs secondes à lire ; sans
+   retour visible, l'import passe pour un échec silencieux. */
+.import-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  font-size: 11.5px;
+  color: #7DD3FC;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-spinner {
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .import-spinner { animation: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ERROR BOUNDARY
+
+   `ErrorBoundary` renders `.error-boundary`, `.error-boundary-detail` and
+   `.error-boundary-actions`, and none of the three had ever been declared. A
+   caught render error therefore produced unstyled black-on-transparent text and
+   two default browser buttons stretched across the chart area — a fallback that
+   looked more broken than the crash it was catching. Nothing warns about a class
+   that is referenced but never defined: not the typechecker, not the linter, not
+   the tests.
+══════════════════════════════════════════════════════════════════ */
+.error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  padding: 32px 24px;
+  text-align: center;
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+.error-boundary > svg {
+  color: var(--gold);
+}
+
+.error-boundary h2 {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.error-boundary-detail {
+  margin: 0;
+  max-width: 560px;
+  /* The message comes from a thrown Error and can be a single very long token
+     (a minified stack frame, a URL). Without these it forces its intrinsic
+     width on the flex column and pushes the buttons off-screen. */
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+
+.error-boundary-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.error-boundary-actions button {
+  height: 32px;
+  padding: 0 16px;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background 0.13s var(--ease-snappy),
+    color 0.13s var(--ease-snappy),
+    border-color 0.13s var(--ease-snappy);
+}
+
+.error-boundary-actions button:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+/* "Réinitialiser la session" clears localStorage: it must not read as the
+   safe default sitting next to "Réessayer". */
+.error-boundary-actions button:last-child {
+  color: var(--bear-bright);
+  border-color: var(--bear-border);
+  background: var(--bear-dim);
+}
+
+.error-boundary-actions button:last-child:hover {
+  background: rgba(244, 63, 94, 0.20);
+  border-color: var(--bear);
+  color: var(--bear-bright);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   TRADE SIDE BADGE
+
+   `.badge-type` and its `.long` / `.short` modifiers are applied by the trade
+   journal and by the sessions list, and none of the three had ever been
+   declared — the LONG/SHORT pill rendered as bare inline text, indistinguishable
+   from the price next to it. Sized and coloured to match `.market-badge`, which
+   is the same idea one row higher in the interface.
+══════════════════════════════════════════════════════════════════ */
+.badge-type {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1.5px 6px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  /* Neutral default: the sessions list uses the bare class for "En cache". */
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.badge-type.long {
+  background: var(--bull-dim);
+  color: var(--bull-bright);
+  border-color: var(--bull-border);
+}
+
+.badge-type.short {
+  background: var(--bear-dim);
+  color: var(--bear-bright);
+  border-color: var(--bear-border);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   COUVERTURE D'UNE UNITÉ DE TEMPS — pourquoi le replay ne peut pas suivre
+══════════════════════════════════════════════════════════════════ */
+.tfc-modal {
+  width: 560px;
+}
+
+.tfc-lead {
+  margin: 0 0 20px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+/* ── L'axe : la période chargée, la fenêtre disponible, la position ── */
+.tfc-axis {
+  margin-bottom: 20px;
+}
+
+.tfc-axis-track {
+  position: relative;
+  height: 22px;
+  margin-bottom: 12px;
+}
+
+.tfc-axis-full,
+.tfc-axis-window {
+  position: absolute;
+  top: 7px;
+  height: 8px;
+  border-radius: 4px;
+}
+
+.tfc-axis-full {
+  left: 0;
+  right: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+}
+
+.tfc-axis-window {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-border), 0 0 12px var(--accent-glow);
+  /* Une fenêtre de quelques jours dans vingt ans d'historique tombe sous le
+     pixel : sans largeur plancher, la bande qu'on vient d'expliquer disparaît. */
+  min-width: 3px;
+}
+
+.tfc-axis-cut {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 22px;
+  margin-left: -1px;
+  background: var(--gold);
+  border-radius: 1px;
+}
+
+.tfc-axis-cut::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+
+.tfc-axis-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.tfc-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tfc-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.tfc-swatch.cut { background: var(--gold); border-radius: 50%; }
+.tfc-swatch.window { background: var(--accent); }
+.tfc-swatch.full { background: var(--bg-elevated); border: 1px solid var(--border-light); }
+
+/* ── Les chiffres, alignés pour être comparés ── */
+.tfc-facts {
+  /* Grille et non flex : avec `flex-wrap`, la troisième carte passait seule à
+     la ligne et s'étirait sur toute la largeur. Trois colonnes égales se
+     comparent, une carte pleine largeur se lit comme un bloc à part. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 0 0 22px;
+}
+
+.tfc-fact {
+  min-width: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.tfc-fact dt {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.tfc-fact dd {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tfc-fact dd.tfc-fact-gap { color: var(--gold); }
+
+.tfc-fact-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.tfc-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.tfc-note {
+  margin: 14px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CHAMP DE FORMULAIRE
+
+   `.form-input` était appliqué au champ « Nommez cette session » sans avoir
+   jamais été déclaré, et la feuille ne porte aucune règle générique sur
+   `input`. Le champ retombait donc sur le rendu natif — fond blanc, texte noir,
+   bordure système — au milieu d'une modale sombre en verre dépoli. Aligné ici
+   sur `.ind-field input`, qui résout le même problème un écran plus loin.
+══════════════════════════════════════════════════════════════════ */
+.form-input {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-family: var(--font);
+  font-size: 13px;
+  outline: none;
+  min-width: 0;
+  transition: border-color 0.15s var(--ease-snappy), box-shadow 0.15s var(--ease-snappy);
+}
+
+.form-input::placeholder {
+  color: var(--text-muted);
+}
+
+.form-input:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* Tant qu'un menu de la barre de replay est ouvert, la barre cesse de rogner.
+
+   `#replay-bar` porte `overflow: auto` comme filet de sécurité sur les fenêtres
+   courtes. Or un conteneur dont l'`overflow` n'est pas `visible` rogne TOUS ses
+   descendants positionnés en absolu, y compris hors de sa boîte : les trois
+   menus (point de départ, vitesse, ordres en attente) s'ouvrent vers le haut et
+   se faisaient couper au ras de la barre — on n'en voyait que la dernière ligne.
+
+   `position: fixed` sur les menus ne sauverait rien : `#replay-bar` porte un
+   `transform`, ce qui en fait le bloc conteneur de ses descendants fixes, qui
+   restent donc rognés. Les deux besoins étant exclusifs, on choisit selon le
+   moment — personne ne fait défiler la barre pendant qu'il lit un menu. */
+#replay-bar.has-open-menu {
+  overflow: visible;
+}
+
+/* ── Import : aperçu interprété ────────────────────────────────
+   Montre ce que l'import va lire, pas seulement les noms de colonnes : un
+   mappage décalé d'une colonne (fichier sans en-tête, colonne heure prise pour
+   l'ouverture) ne se voit qu'aux valeurs. */
+.import-progress-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-progress .btn-sm {
+  flex-shrink: 0;
+}
+
+.import-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #FCD34D;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.import-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.import-preview-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.import-preview {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-preview th,
+.import-preview td {
+  padding: 4px 8px;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.import-preview th:first-child,
+.import-preview td:first-child {
+  text-align: left;
+}
+
+.import-preview th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.import-preview tr:last-child td {
+  border-bottom: none;
+}
+
+.import-preview .is-invalid {
+  color: var(--bear);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+/* Encart réduit : une zone secondaire (barre, modale) a planté mais le reste de
+   l'application fonctionne encore — ne pas le recouvrir. */
+.error-boundary.error-boundary-compact {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 10000;
+  transform: translateX(-50%);
+  flex: none;
+  flex-direction: row;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.error-boundary-compact p {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.error-boundary-compact > svg {
+  flex-shrink: 0;
+}
+
+/* Le seul bouton est « Fermer » : pas la teinte d'alerte du dernier bouton. */
+.error-boundary-compact .error-boundary-actions button:last-child {
+  color: var(--text-secondary);
+  border-color: var(--border-light);
+  background: var(--bg-overlay);
+}
+
+/* ── Journal : hiérarchie et définitions ───────────────────────
+   Trois chiffres principaux au-dessus, le détail en dessous ; chaque libellé
+   porte sa définition en info-bulle. */
+.th-stats-primary {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.th-stat[title] {
+  cursor: help;
+}
+
+.th-stat-primary .th-stat-val {
+  font-size: 14px;
+}
+
+.th-stat-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.th-stat-hint {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.th-disclaimer {
+  margin: 6px 10px 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.th-trade-meta {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-export:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Risque réel au-dessus du risque demandé (volume arrondi au lot minimum). */
+.rp-order-hints .derived.is-warning {
+  color: var(--gold);
+}
+
+/* Date de départ : un vrai champ date, borné aux données chargées, à la place
+   du `prompt()` natif. */
+.rp-date-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.rp-date-form input[type='date'] {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color-scheme: dark;
+}
+
+.rp-date-form .btn-sm {
+  flex-shrink: 0;
+}
+
+/* ── Premiers pas ──────────────────────────────────────────────
+   Guide d'arrivée : données → départ → ordre → journal. Coin supérieur droit
+   du graphique, sous la barre d'outils, au-dessous des panneaux (z 500). */
+.onboarding {
+  position: fixed;
+  top: 58px;
+  right: 72px;
+  z-index: 90;
+  width: 264px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+
+.onboarding-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.onboarding-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.onboarding-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-overlay);
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.onboarding-step {
+  display: flex;
+  gap: 9px;
+  color: var(--text-muted);
+}
+
+.onboarding-step.is-current {
+  color: var(--text-primary);
+}
+
+.onboarding-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+}
+
+.onboarding-step.is-current .onboarding-marker {
+  color: #FFFFFF;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.onboarding-step.is-done .onboarding-marker {
+  color: var(--bull);
+  background: var(--bull-dim);
+  border-color: var(--bull-border);
+}
+
+.onboarding-step.is-done .onboarding-title {
+  text-decoration: line-through;
+}
+
+.onboarding-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding-title {
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.onboarding-detail {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  .onboarding {
+    right: 16px;
+  }
+}
+
+/* Saisie d'annotation, à l'endroit du clic (remplace le `prompt()` natif). */
+.annotation-input {
+  position: absolute;
+  z-index: 40;
+  width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-overlay);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  outline: none;
+  transform: translateY(-50%);
+}
+
+/* ── Frais de trading (barre de replay) ─────────────────────────
+   Toujours visibles à côté du solde : tout résultat en dépend. */
+.rp-costs-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.rp-costs-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+/* Résultats hors frais : un état à ne pas manquer. */
+.rp-costs-btn.is-off {
+  color: var(--gold);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.tv-dropdown-menu.rp-costs-menu {
+  bottom: calc(100% + 8px);
+  top: auto;
+  display: block;
+  width: 280px;
+  padding: 6px 10px 10px;
+}
+
+.rp-costs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.rp-costs-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rp-costs-fields.is-disabled {
+  opacity: 0.45;
+}
+
+.rp-costs-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.rp-costs-fields input {
+  height: 26px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+
+.rp-costs-note {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.th-disclaimer.is-warning {
+  color: var(--gold);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   UTILITAIRES ISSUS DES STYLES EN LIGNE
+
+   Générés depuis les 221 `style={{…}}` statiques des composants, qu'ils
+   remplacent. Un style en ligne l'emportait sur tout sélecteur : `!important`
+   reproduit exactement ce comportement, et le relevé des styles calculés avant
+   et après la migration est identique. À remplacer au fil de l'eau par des
+   classes sémantiques par composant, qui pourront s'en passer.
+══════════════════════════════════════════════════════════════════ */
+.u-align-items-center { align-items: center !important; }
+.u-align-items-flex-start { align-items: flex-start !important; }
+.u-animation-pulse-1_5s-infinite { animation: pulse 1.5s infinite !important; }
+.u-animation-spin-1s-linear-infinite { animation: spin 1s linear infinite !important; }
+.u-backdrop-filter-blur-20px { backdrop-filter: blur(20px) !important; }
+.u-background-34d399 { background: #34D399 !important; }
+.u-background-38bdf8 { background: #38BDF8 !important; }
+.u-background-4ade80 { background: #4ADE80 !important; }
+.u-background-60a5fa { background: #60A5FA !important; }
+.u-background-a78bfa { background: #A78BFA !important; }
+.u-background-accent { background: var(--accent) !important; }
+.u-background-bg-card { background: var(--bg-card) !important; }
+.u-background-bg-elevated { background: var(--bg-elevated) !important; }
+.u-background-f472b6 { background: #F472B6 !important; }
+.u-background-fb923c { background: #FB923C !important; }
+.u-background-fbbf24 { background: #FBBF24 !important; }
+.u-background-none { background: none !important; }
+.u-background-rgba-15-23-42-0_95 { background: rgba(15, 23, 42, 0.95) !important; }
+.u-background-rgba-234-179-8-0_1 { background: rgba(234, 179, 8, 0.1) !important; }
+.u-background-rgba-244-63-94-0_12 { background: rgba(244, 63, 94, 0.12) !important; }
+.u-background-rgba-244-63-94-0_15 { background: rgba(244, 63, 94, 0.15) !important; }
+.u-background-rgba-244-63-94-0_18 { background: rgba(244, 63, 94, 0.18) !important; }
+.u-background-rgba-255-255-255-0_04 { background: rgba(255, 255, 255, 0.04) !important; }
+.u-background-rgba-255-255-255-0_06 { background: rgba(255, 255, 255, 0.06) !important; }
+.u-background-rgba-255-255-255-0_15 { background: rgba(255, 255, 255, 0.15) !important; }
+.u-background-rgba-56-189-248-0_15 { background: rgba(56, 189, 248, 0.15) !important; }
+.u-background-rgba-59-130-246-0_2 { background: rgba(59, 130, 246, 0.2) !important; }
+.u-border-19dc74 { border: 1px solid rgba(244, 63, 94, 0.3) !important; }
+.u-border-1px-solid-border { border: 1px solid var(--border) !important; }
+.u-border-1px-solid-border-light { border: 1px solid var(--border-light) !important; }
+.u-border-39cd06 { border: 1px solid rgba(59, 130, 246, 0.35) !important; }
+.u-border-7eec68 { border: 1px solid rgba(255, 255, 255, 0.12) !important; }
+.u-border-b057bc { border: 1px solid rgba(56, 189, 248, 0.35) !important; }
+.u-border-bottom-1px-solid-border { border-bottom: 1px solid var(--border) !important; }
+.u-border-c5b772 { border: 1px solid rgba(244, 63, 94, 0.25) !important; }
+.u-border-color-rgba-56-189-248-0_3 { border-color: rgba(56, 189, 248, 0.3) !important; }
+.u-border-d07d4b { border: 1px solid rgba(255, 255, 255, 0.06) !important; }
+.u-border-d4a8b5 { border: 1px solid rgba(244, 63, 94, 0.35) !important; }
+.u-border-none { border: none !important; }
+.u-border-radius-10px { border-radius: 10px !important; }
+.u-border-radius-3px { border-radius: 3px !important; }
+.u-border-radius-4px { border-radius: 4px !important; }
+.u-border-radius-50pct { border-radius: 50% !important; }
+.u-border-radius-5px { border-radius: 5px !important; }
+.u-border-radius-8px { border-radius: 8px !important; }
+.u-border-radius-radius-sm { border-radius: var(--radius-sm) !important; }
+.u-bottom-0 { bottom: 0 !important; }
+.u-bottom-calc-100pct-8px { bottom: calc(100% + 8px) !important; }
+.u-box-shadow-ae6988 { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6) !important; }
+.u-box-shadow-shadow-lg { box-shadow: var(--shadow-lg) !important; }
+.u-color-10b981 { color: #10B981 !important; }
+.u-color-34d399 { color: #34D399 !important; }
+.u-color-38bdf8 { color: #38BDF8 !important; }
+.u-color-3b82f6 { color: #3B82F6 !important; }
+.u-color-60a5fa { color: #60A5FA !important; }
+.u-color-64748b { color: #64748B !important; }
+.u-color-94a3b8 { color: #94A3B8 !important; }
+.u-color-a78bfa { color: #A78BFA !important; }
+.u-color-accent { color: var(--accent) !important; }
+.u-color-cbd5e1 { color: #CBD5E1 !important; }
+.u-color-f43f5e { color: #F43F5E !important; }
+.u-color-fb7185 { color: #FB7185 !important; }
+.u-color-fb923c { color: #FB923C !important; }
+.u-color-fbbf24 { color: #FBBF24 !important; }
+.u-color-fcd34d { color: #FCD34D !important; }
+.u-color-fff { color: #FFF !important; }
+.u-color-gold { color: var(--gold) !important; }
+.u-color-inherit { color: inherit !important; }
+.u-color-red { color: var(--red) !important; }
+.u-color-text-muted { color: var(--text-muted) !important; }
+.u-color-text-primary { color: var(--text-primary) !important; }
+.u-color-text-secondary { color: var(--text-secondary) !important; }
+.u-cursor-pointer { cursor: pointer !important; }
+.u-display-block { display: block !important; }
+.u-display-flex { display: flex !important; }
+.u-display-grid { display: grid !important; }
+.u-display-inline-flex { display: inline-flex !important; }
+.u-display-none { display: none !important; }
+.u-flex-1 { flex: 1 !important; }
+.u-flex-direction-column { flex-direction: column !important; }
+.u-flex-wrap-wrap { flex-wrap: wrap !important; }
+.u-font-family-mono { font-family: var(--mono) !important; }
+.u-font-inherit { font: inherit !important; }
+.u-font-size-10_5px { font-size: 10.5px !important; }
+.u-font-size-10px { font-size: 10px !important; }
+.u-font-size-11_5px { font-size: 11.5px !important; }
+.u-font-size-11px { font-size: 11px !important; }
+.u-font-size-12px { font-size: 12px !important; }
+.u-font-size-13px { font-size: 13px !important; }
+.u-font-size-14px { font-size: 14px !important; }
+.u-font-size-9_5px { font-size: 9.5px !important; }
+.u-font-size-9px { font-size: 9px !important; }
+.u-font-style-italic { font-style: italic !important; }
+.u-font-weight-600 { font-weight: 600 !important; }
+.u-font-weight-700 { font-weight: 700 !important; }
+.u-gap-10px { gap: 10px !important; }
+.u-gap-16px { gap: 16px !important; }
+.u-gap-2px { gap: 2px !important; }
+.u-gap-3px { gap: 3px !important; }
+.u-gap-4px { gap: 4px !important; }
+.u-gap-5px { gap: 5px !important; }
+.u-gap-6px { gap: 6px !important; }
+.u-gap-7px { gap: 7px !important; }
+.u-gap-8px { gap: 8px !important; }
+.u-grid-template-columns-0e176e { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)) !important; }
+.u-grid-template-columns-1_2fr-1fr-1fr { grid-template-columns: 1.2fr 1fr 1fr !important; }
+.u-height-100pct { height: 100% !important; }
+.u-height-14px { height: 14px !important; }
+.u-height-22px { height: 22px !important; }
+.u-height-28px { height: 28px !important; }
+.u-height-34px { height: 34px !important; }
+.u-height-38px { height: 38px !important; }
+.u-height-60px { height: 60px !important; }
+.u-inset-0 { inset: 0 !important; }
+.u-justify-content-center { justify-content: center !important; }
+.u-justify-content-flex-end { justify-content: flex-end !important; }
+.u-justify-content-space-between { justify-content: space-between !important; }
+.u-left-0 { left: 0 !important; }
+.u-left-10px { left: 10px !important; }
+.u-left-auto { left: auto !important; }
+.u-letter-spacing-0_03em { letter-spacing: 0.03em !important; }
+.u-letter-spacing-0_04em { letter-spacing: 0.04em !important; }
+.u-letter-spacing-0_8px { letter-spacing: 0.8px !important; }
+.u-margin-0-2px { margin: 0 2px !important; }
+.u-margin-6px-0 { margin: 6px 0 !important; }
+.u-margin-8px-8px-0 { margin: 8px 8px 0 !important; }
+.u-margin-bottom-12px { margin-bottom: 12px !important; }
+.u-margin-bottom-2px { margin-bottom: 2px !important; }
+.u-margin-bottom-3px { margin-bottom: 3px !important; }
+.u-margin-bottom-4px { margin-bottom: 4px !important; }
+.u-margin-bottom-6px { margin-bottom: 6px !important; }
+.u-margin-bottom-8px { margin-bottom: 8px !important; }
+.u-margin-top-16px { margin-top: 16px !important; }
+.u-margin-top-2px { margin-top: 2px !important; }
+.u-max-height-42vh { max-height: 42vh !important; }
+.u-max-height-440px { max-height: 440px !important; }
+.u-max-height-44vh { max-height: 44vh !important; }
+.u-max-height-48vh { max-height: 48vh !important; }
+.u-max-width-720px { max-width: 720px !important; }
+.u-max-width-820px { max-width: 820px !important; }
+.u-min-width-150px { min-width: 150px !important; }
+.u-min-width-170px { min-width: 170px !important; }
+.u-min-width-210px { min-width: 210px !important; }
+.u-min-width-220px { min-width: 220px !important; }
+.u-min-width-230px { min-width: 230px !important; }
+.u-min-width-240px { min-width: 240px !important; }
+.u-min-width-250px { min-width: 250px !important; }
+.u-min-width-260px { min-width: 260px !important; }
+.u-min-width-95px { min-width: 95px !important; }
+.u-opacity-0_6 { opacity: 0.6 !important; }
+.u-opacity-1 { opacity: 1 !important; }
+.u-outline-none { outline: none !important; }
+.u-overflow-hidden { overflow: hidden !important; }
+.u-overflow-y-auto { overflow-y: auto !important; }
+.u-padding-0-14px { padding: 0 14px !important; }
+.u-padding-0-16px { padding: 0 16px !important; }
+.u-padding-12px-14px { padding: 12px 14px !important; }
+.u-padding-12px-16px { padding: 12px 16px !important; }
+.u-padding-16px { padding: 16px !important; }
+.u-padding-1px-5px { padding: 1px 5px !important; }
+.u-padding-2px-4px { padding: 2px 4px !important; }
+.u-padding-2px-6px { padding: 2px 6px !important; }
+.u-padding-3px-8px { padding: 3px 8px !important; }
+.u-padding-4px-10px { padding: 4px 10px !important; }
+.u-padding-4px-6px { padding: 4px 6px !important; }
+.u-padding-4px-8px { padding: 4px 8px !important; }
+.u-padding-5px-8px { padding: 5px 8px !important; }
+.u-padding-60px { padding: 60px !important; }
+.u-padding-6px { padding: 6px !important; }
+.u-padding-6px-10px { padding: 6px 10px !important; }
+.u-padding-6px-8px { padding: 6px 8px !important; }
+.u-padding-7px-10px-7px-30px { padding: 7px 10px 7px 30px !important; }
+.u-padding-8px { padding: 8px !important; }
+.u-padding-right-4px { padding-right: 4px !important; }
+.u-pointer-events-none { pointer-events: none !important; }
+.u-position-absolute { position: absolute !important; }
+.u-position-relative { position: relative !important; }
+.u-right-0 { right: 0 !important; }
+.u-text-align-center { text-align: center !important; }
+.u-text-align-left { text-align: left !important; }
+.u-text-overflow-ellipsis { text-overflow: ellipsis !important; }
+.u-top-0 { top: 0 !important; }
+.u-top-16px { top: 16px !important; }
+.u-top-auto { top: auto !important; }
+.u-transition-background-0_15s-ease { transition: background 0.15s ease !important; }
+.u-transition-border-color-0_2s { transition: border-color 0.2s !important; }
+.u-white-space-nowrap { white-space: nowrap !important; }
+.u-width-100pct { width: 100% !important; }
+.u-width-14px { width: 14px !important; }
+.u-width-1px { width: 1px !important; }
+.u-width-22px { width: 22px !important; }
+.u-width-28px { width: 28px !important; }
+.u-width-380px { width: 380px !important; }
+.u-width-95pct { width: 95% !important; }
+.u-z-index-40 { z-index: 40 !important; }
