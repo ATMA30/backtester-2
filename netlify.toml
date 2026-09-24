@@ -2,12 +2,40 @@
   command = "npm run build"
   publish = "dist"
 
+# `/api/history` imports `netlify/lib/history-core.ts` and `dukascopy-node`
+# (a runtime dependency since Dukascopy runs in production, not only in dev).
+# esbuild bundles both into the function, the way the local check does.
+[functions]
+  node_bundler = "esbuild"
+
+# The history function also declares `path = "/api/history"` in its own config;
+# this redirect keeps the route working on older Netlify build images.
 [[redirects]]
   from = "/api/history"
   to = "/.netlify/functions/history"
   status = 200
 
+# Any other /api/* route must 404 instead of falling through to the SPA.
+#
+# There is no dev-only route any more: the Vite server runs this same function
+# code. `/api/dukascopy` once existed in dev only; in production it hit the SPA
+# catch-all and came back as `200 text/html`, and gold, silver, indices and
+# intraday forex silently fell through to generated candles.
+[[redirects]]
+  from = "/api/*"
+  to = "/api-not-found"
+  status = 404
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=()"
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://api.frankfurter.dev https://api.binance.com wss://ws.derivws.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
