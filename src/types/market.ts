@@ -1,5 +1,6 @@
 import { Position, PendingOrder } from './trading';
 import { Drawing } from './drawing';
+import type { MarketCategory } from '../domain/instruments';
 
 export interface Candle {
   time: number;
@@ -21,7 +22,7 @@ export interface TimeframeDef {
 export interface MarketPair {
   symbol: string;
   label: string;
-  category: 'Forex Majors' | 'Forex Minors' | 'Forex Exotics' | 'Métaux & Matières' | 'Indices Mondiaux' | 'Indices Synthétiques (Deriv)' | 'Crypto';
+  category: MarketCategory;
   decimals: number;
   pip: number;
   derivSymbol?: string;
@@ -37,14 +38,27 @@ export interface DatasetMeta {
   createdAt: number;
   timeRange: string;
   data?: Candle[];
+  /**
+   * Where the candles came from. A user's imported file cannot be downloaded
+   * again, a provider series can: the cache must never let the second replace
+   * the first. Absent on records written before the field existed.
+   */
+  source?: 'import' | 'provider';
 }
+
+export type IndicatorKind = 'SMA' | 'EMA' | 'RSI' | 'MACD' | 'BB' | 'VWAP';
 
 export interface ActiveIndicator {
   id: string;
-  type: 'SMA' | 'EMA' | 'RSI' | 'MACD' | 'BB' | 'VWAP';
+  type: IndicatorKind;
   period: number;
   color: string;
-  series?: any;
+  /**
+   * Live lightweight-charts series handle, owned by TradingChart.
+   * Never persisted (see the settings subscription in useMarketStore) and never
+   * read outside the chart layer — hence `unknown` rather than `any`.
+   */
+  series?: unknown;
 }
 
 export interface ForexSessionConfig {
