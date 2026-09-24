@@ -7,3 +7,4 @@ dist/
 .market_cache
 .playwright-report
 .playwright-mcp
+.vite/
