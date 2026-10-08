@@ -34,7 +34,7 @@ function marketDataPlugin(): Plugin {
       // had drifted: invented wicks, no validation, `Access-Control-Allow-Origin: *`,
       // and five hourly years of Dukascopy that production never had. There is
       // no dev-only route any more: what runs here is what runs on Netlify.
-      server.middlewares.use('/api/history', async (req, res) => {
+      const historyHandler = async (req: IncomingMessage, res: ServerResponse) => {
         try {
           const response = await handleHistoryRequest(toWebRequest(req));
           await sendWebResponse(res, response);
@@ -44,16 +44,20 @@ function marketDataPlugin(): Plugin {
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ error: 'upstream_failure' }));
         }
-      });
+      };
 
-      // Any other /api/* route: 404 JSON, as `netlify.toml` does in production.
-      // Vite's SPA fallback answered `200 text/html` here, the very trap that
-      // once hid a missing endpoint behind a successful status.
-      server.middlewares.use('/api', (_req, res) => {
+      const api404Handler = (_req: IncomingMessage, res: ServerResponse) => {
         res.statusCode = 404;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({ error: 'not_found' }));
-      });
+      };
+
+      // Unshift to the top of Vite's middleware stack so /api/history executes
+      // before Vite's internal static/transform middleware intercepts api/history.ts.
+      server.middlewares.stack.unshift(
+        { route: '/api/history', handle: historyHandler },
+        { route: '/api', handle: api404Handler }
+      );
     },
   };
 }

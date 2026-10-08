@@ -126,5 +126,18 @@ describe('fetchHistoricalSeries', () => {
     expect(series.isSimulated).toBe(true);
     expect(series.provenance).toBe('simulated');
   });
+
+  it('never queues frankfurter for intraday forex requests (e.g. 1m, 5m, 1h)', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(ok([]))));
+
+    const series = await fetchHistoricalSeries({
+      symbol: 'GBPUSD',
+      interval: '1m',
+      range: 'max',
+      allowSimulated: false,
+    });
+
+    expect(series.attempted).not.toContain('frankfurter');
+  });
 });
 

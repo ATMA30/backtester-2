@@ -376,15 +376,16 @@ function providersFor(
     // that only ever existed on the dev server.
 
     case 'forex': {
-      // The ECB series was once pushed *twice* for daily requests, re-running a
-      // provider that had just failed and reporting it twice in `attempted`.
-      const frankfurter: ProviderAttempt = {
-        provenance: 'frankfurter',
-        run: () => whole(fetchFrankfurter(symbol, ctx)),
-      };
-      // Last resort when `/api/history` is down: the ECB publishes closes
-      // only (no wicks), but it answers from the browser without a proxy.
-      attempts.push(frankfurter);
+      // The ECB series publishes closes only (no wicks) and ONLY at daily resolution (1d).
+      // It must NEVER be used as a fallback for intraday requests (1m, 5m, 1h...) as it would
+      // return daily candles and force the chart into 1D!
+      if (granularity >= TimeframeSeconds.D1) {
+        const frankfurter: ProviderAttempt = {
+          provenance: 'frankfurter',
+          run: () => whole(fetchFrankfurter(symbol, ctx)),
+        };
+        attempts.push(frankfurter);
+      }
       break;
     }
 
