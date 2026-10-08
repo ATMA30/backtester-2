@@ -98,17 +98,33 @@ describe('fetchHistoricalSeries', () => {
     expect(new Set(series.attempted).size).toBe(series.attempted.length);
   });
 
-  it('never returns generated candles when the caller forbids them', async () => {
+  it('never returns generated candles when the caller forbids them or by default', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(ok([]))));
+
+    // Default: allowSimulated is false
+    const series = await fetchHistoricalSeries({
+      symbol: 'EURUSD',
+      interval: '1d',
+      range: 'max',
+    });
+
+    expect(series.candles).toEqual([]);
+    expect(series.isSimulated).toBe(true);
+  });
+
+  it('returns generated candles only when explicitly opted in via allowSimulated: true', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(ok([]))));
 
     const series = await fetchHistoricalSeries({
       symbol: 'EURUSD',
       interval: '1d',
       range: 'max',
-      allowSimulated: false,
+      allowSimulated: true,
     });
 
-    expect(series.candles).toEqual([]);
+    expect(series.candles.length).toBeGreaterThan(0);
     expect(series.isSimulated).toBe(true);
+    expect(series.provenance).toBe('simulated');
   });
 });
+

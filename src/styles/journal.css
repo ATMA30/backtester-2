@@ -1,0 +1,546 @@
+/* Journal de trades : panneau, statistiques, filtres, notes et captures. */
+
+/* ══════════════════════════════════════════════════════════════════
+   TRADE HISTORY PANEL
+══════════════════════════════════════════════════════════════════ */
+#trade-history-panel {
+  position: fixed;
+  right: 0; top: 46px;
+  /* Au-dessus de la barre de replay, dont la hauteur est mesurée : avec un
+     `bottom: 70px` fixe, la barre à deux rangées passait sous le panneau et
+     Acheter / Vendre devenaient inaccessibles journal ouvert. */
+  bottom: calc(var(--statusbar-h) + var(--replay-bar-h, 0px) + 20px);
+  width: 360px;
+  max-width: 100vw;
+  background: var(--bg-glass);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-left: 1px solid var(--border);
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.32s var(--ease-out);
+  box-shadow: -4px 0 28px rgba(0,0,0,0.45);
+}
+
+#trade-history-panel.open {
+  transform: translateX(0);
+}
+
+.th-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.th-title {
+  font-size: 12.5px; font-weight: 650;
+  color: var(--text-primary); letter-spacing: -0.01em;
+}
+
+.th-export {
+  background: none; border: none;
+  color: var(--text-muted); cursor: pointer;
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-xs);
+  transition: all 0.15s;
+  font-size: 13px;
+}
+.th-export:hover { background: var(--bg-overlay); color: var(--text-primary); }
+
+.th-close {
+  background: none; border: none;
+  color: var(--text-muted); cursor: pointer;
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-xs);
+  transition: all 0.15s;
+}
+.th-close:hover { background: var(--bg-overlay); color: var(--text-primary); }
+
+.th-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.th-stat {
+  background: var(--bg-surface);
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+
+.th-stat-label {
+  font-size: 8.5px; font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.09em;
+}
+
+.th-stat-val {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  color: var(--text-primary); font-feature-settings: 'tnum';
+  transition: color 0.25s;
+}
+.th-stat-val.positive { color: var(--bull); }
+.th-stat-val.negative { color: var(--bear); }
+
+#equity-curve-container {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 8px 8px 0 8px;
+  padding: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+#equity-curve {
+  display: block;
+}
+
+.th-list { flex: 1; overflow-y: auto; padding: 8px; }
+
+.th-trade {
+  margin-bottom: 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.th-trade.is-expanded { border-color: var(--accent-border); }
+
+/* Un bouton : toute la ligne ouvre les notes du trade. */
+.th-trade-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.th-trade-row:hover { background: var(--bg-elevated); }
+.th-trade-price, .th-trade-meta { display: block; }
+.th-trade-price { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.th-trade-setup {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.th-trade-icons {
+  display: flex;
+  gap: 4px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.th-trade-chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.th-trade.is-expanded .th-trade-chevron { transform: rotate(180deg); }
+
+.th-badge {
+  font-size: 8.5px; font-weight: 800;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  letter-spacing: 0.06em; flex-shrink: 0;
+}
+.th-badge.long { background: var(--bull-dim); color: var(--bull); border: 1px solid var(--bull-border); }
+.th-badge.short { background: var(--bear-dim); color: var(--bear); border: 1px solid var(--bear-border); }
+
+.th-trade-info { flex: 1; min-width: 0; }
+.th-trade-price { font-family: var(--mono); font-size: 10.5px; color: var(--text-secondary); font-feature-settings: 'tnum'; }
+
+.th-trade-pnl {
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  font-feature-settings: 'tnum'; flex-shrink: 0;
+}
+.th-trade-pnl.pos { color: var(--bull); }
+.th-trade-pnl.neg { color: var(--bear); }
+
+.th-empty {
+  text-align: center;
+  padding: 36px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   TRADE SIDE BADGE
+
+   `.badge-type` and its `.long` / `.short` modifiers are applied by the trade
+   journal and by the sessions list, and none of the three had ever been
+   declared — the LONG/SHORT pill rendered as bare inline text, indistinguishable
+   from the price next to it. Sized and coloured to match `.market-badge`, which
+   is the same idea one row higher in the interface.
+══════════════════════════════════════════════════════════════════ */
+.badge-type {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1.5px 6px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  /* Neutral default: the sessions list uses the bare class for "En cache". */
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.badge-type.long {
+  background: var(--bull-dim);
+  color: var(--bull-bright);
+  border-color: var(--bull-border);
+}
+
+.badge-type.short {
+  background: var(--bear-dim);
+  color: var(--bear-bright);
+  border-color: var(--bear-border);
+}
+
+/* ── Journal : hiérarchie et définitions ───────────────────────
+   Trois chiffres principaux au-dessus, le détail en dessous ; chaque libellé
+   porte sa définition en info-bulle. */
+.th-stats-primary {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.th-stat[title] {
+  cursor: help;
+}
+
+.th-stat-primary .th-stat-val {
+  font-size: 14px;
+}
+
+.th-stat-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.th-stat-hint {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.th-disclaimer {
+  margin: 6px 10px 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.th-capture-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 10px 2px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* ── Filtres du journal ── */
+.journal-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.journal-filter-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.journal-filter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.journal-filter input,
+.journal-filter select {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 10.5px;
+  color-scheme: dark;
+}
+
+.journal-side-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.journal-side-toggle button {
+  padding: 0 8px;
+  height: 24px;
+  border: 0;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.journal-side-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+
+.journal-side-toggle button.active {
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+  font-weight: 600;
+}
+
+.journal-filter-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--accent-hover);
+}
+
+.journal-filter-reset {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ── Notes d'un trade ── */
+.trade-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 10px 10px;
+}
+
+.trade-notes-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.trade-notes-field input,
+.trade-notes-field textarea {
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  resize: vertical;
+}
+
+.trade-emotions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.trade-emotion {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.trade-emotion.active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+}
+
+.trade-capture {
+  position: relative;
+}
+
+.trade-capture-thumb {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: none;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.trade-capture-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.trade-capture-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: rgba(11, 14, 20, 0.8);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.trade-capture-delete:hover {
+  color: var(--bear-bright);
+}
+
+.trade-capture-missing {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.trade-capture-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+
+.trade-capture-viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+.trade-capture-viewer-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  padding: 6px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+}
+
+.th-trade-meta {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-export:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.th-disclaimer.is-warning {
+  color: var(--gold);
+}
+
+/* ── Journal de trades : classes nommées (ex-utilitaires) ── */
+.th-panel-layout {
+  display: flex;
+}
+.th-title-row {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+.th-title-icon {
+  color: #38BDF8;
+}
+.th-header-actions {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+.th-icon-btn {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+.th-equity {
+  height: 60px;
+  margin: 8px 8px 0;
+}
+.th-equity-svg {
+  height: 100%;
+  width: 100%;
+}

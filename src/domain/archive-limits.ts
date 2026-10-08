@@ -31,8 +31,15 @@ export const DUKASCOPY_SPAN_DAYS: Readonly<Record<string, number>> = {
   '4h': 1_095,
 };
 
-/** First year of Dukascopy daily candles the server asks for. */
-export const DUKASCOPY_DAILY_FROM = '2008-01-01';
+/**
+ * First day of Dukascopy daily candles the server asks for.
+ *
+ * It was 2008, an arbitrary cut: everything before was filled with ECB closes —
+ * no wicks, no volume — although Dukascopy publishes real daily OHLC with volume
+ * from 1990–1991 for the major pairs (measured: EURUSD from 1991-01-02 in 0.7 s,
+ * USDCHF from 1990). Asking from 1990 returns whatever each instrument has.
+ */
+export const DUKASCOPY_DAILY_FROM = '1990-01-01';
 
 const years = (days: number): number => Math.round(days / 365);
 

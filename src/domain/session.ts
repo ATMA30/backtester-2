@@ -13,12 +13,15 @@ import { BacktestSession, Candle } from '../types/market';
 import { Position, PendingOrder } from '../types/trading';
 import { parseDrawings } from '../store/useDrawingStore';
 import { sanitizeCandles } from './candles';
+import { parseAnnotation } from './journal';
+import { isAccountCurrency } from './instruments';
 import { TimeframeSeconds } from './timeframes';
 
 /** Upper bounds, so an oversized file cannot lock up the main thread. */
 const MAX_CANDLES = 200_000;
 const MAX_POSITIONS = 50_000;
 const MAX_ORDERS = 1_000;
+const MAX_OPEN_POSITIONS = 1_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -63,6 +66,7 @@ function parsePosition(value: unknown): Position | null {
   const riskAmount = Number(value.riskAmount);
   const fees = Number(value.fees);
   const lastCheckedTime = epochOr(value.lastCheckedTime);
+  const annotation = parseAnnotation(value.annotation);
   return {
     id,
     symbol: tokenOr(value.symbol),
@@ -85,6 +89,8 @@ function parsePosition(value: unknown): Position | null {
       value.closeReason === 'TP' || value.closeReason === 'SL' || value.closeReason === 'MANUAL'
         ? value.closeReason
         : undefined,
+    ...(annotation ? { annotation } : {}),
+    ...(value.hasScreenshot === true ? { hasScreenshot: true } : {}),
   };
 }
 
@@ -112,14 +118,39 @@ function parseOrder(value: unknown): PendingOrder | null {
   };
 }
 
-function parseList<T>(value: unknown, parse: (item: unknown) => T | null, limit: number): T[] {
+/**
+ * Parse each item, keeping the first of any id seen twice: every id-keyed
+ * update (`annotate`, a stop moved on the chart) would otherwise change several
+ * trades at once, and React keys would collide.
+ */
+function parseList<T extends { id: string }>(
+  value: unknown,
+  parse: (item: unknown) => T | null,
+  limit: number,
+  seen = new Set<string>()
+): T[] {
   if (!Array.isArray(value)) return [];
   const out: T[] = [];
   for (const item of value.slice(0, limit)) {
     const parsed = parse(item);
-    if (parsed) out.push(parsed);
+    if (!parsed || seen.has(parsed.id)) continue;
+    seen.add(parsed.id);
+    out.push(parsed);
   }
   return out;
+}
+
+/** Longest instrument name kept. */
+const MAX_SYMBOL = 32;
+
+/**
+ * An instrument name from a file: printable characters only (letters, digits,
+ * space and `. _ : / -`), bounded. Imported datasets are named by the user and
+ * may contain spaces, so the stricter `TOKEN` does not apply.
+ */
+function symbolOr(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[^\p{L}\p{N} ._:/-]/gu, '').trim().slice(0, MAX_SYMBOL);
 }
 
 export interface SessionParseResult {
@@ -135,7 +166,7 @@ export interface SessionParseResult {
 export function parseBacktestSession(value: unknown): SessionParseResult | null {
   if (!isRecord(value)) return null;
 
-  const symbol = stringOr(value.symbol, '');
+  const symbol = symbolOr(value.symbol);
   if (!symbol) return null;
 
   const warnings: string[] = [];
@@ -157,9 +188,18 @@ export function parseBacktestSession(value: unknown): SessionParseResult | null 
     warnings.push('champ "drawings" ignoré (format inattendu)');
   }
 
-  const closedPositions = parseList(value.closedPositions, parsePosition, MAX_POSITIONS);
+  // One id space for open and closed trades: a position cannot be both.
+  const ids = new Set<string>();
+  const closedPositions = parseList(value.closedPositions, parsePosition, MAX_POSITIONS, ids);
   const pendingOrders = parseList(value.pendingOrders, parseOrder, MAX_ORDERS);
-  const activePosition = parsePosition(value.activePosition);
+  // Sessions saved before several positions could be open carry one
+  // `activePosition`; those before the account currency could change were in USD.
+  const legacyPosition = parsePosition(value.activePosition);
+  const openPositions = Array.isArray(value.openPositions)
+    ? parseList(value.openPositions, parsePosition, MAX_OPEN_POSITIONS, ids)
+    : legacyPosition && !ids.has(legacyPosition.id)
+      ? [legacyPosition]
+      : [];
 
   const baseTF = numberOr(value.baseTF, TimeframeSeconds.D1);
   const now = Date.now();
@@ -179,12 +219,13 @@ export function parseBacktestSession(value: unknown): SessionParseResult | null 
       initialBalance: numberOr(value.initialBalance, 10_000),
       riskPercent: numberOr(value.riskPercent, 2),
       quantity: numberOr(value.quantity, 1),
+      accountCurrency: isAccountCurrency(value.accountCurrency) ? value.accountCurrency : 'USD',
       closedPositions,
-      activePosition,
+      openPositions,
       pendingOrders,
       drawings,
       candlesCount: candles.length || Math.max(0, Math.floor(numberOr(value.candlesCount, 0))),
-      timeRange: typeof value.timeRange === 'string' ? value.timeRange : undefined,
+      timeRange: typeof value.timeRange === 'string' ? value.timeRange.slice(0, MAX_TEXT) : undefined,
       winRate: Number.isFinite(Number(value.winRate)) ? Number(value.winRate) : undefined,
       totalPnL: Number.isFinite(Number(value.totalPnL)) ? Number(value.totalPnL) : undefined,
       totalTrades: Number.isFinite(Number(value.totalTrades)) ? Number(value.totalTrades) : undefined,
@@ -193,3 +234,27 @@ export function parseBacktestSession(value: unknown): SessionParseResult | null 
     warnings,
   };
 }
+
+/**
+ * A session arriving from a file, made independent of this browser's trades.
+ *
+ * Its trade ids come from another browser — or from this one, if the file is a
+ * re-import — and captures are keyed by trade id: a shared id showed a local
+ * capture on the imported trade, and deleting it from one erased the other's.
+ * Every trade gets a fresh id, and loses a capture flag whose image stayed
+ * where the file was made.
+ */
+export function detachImportedSession(session: BacktestSession, newTradeId: () => string): BacktestSession {
+  const detach = (p: Position): Position => {
+    const copy: Position = { ...p, id: newTradeId() };
+    delete copy.hasScreenshot;
+    return copy;
+  };
+  return {
+    ...session,
+    closedPositions: session.closedPositions.map(detach),
+    openPositions: session.openPositions.map(detach),
+    pendingOrders: session.pendingOrders.map((o) => ({ ...o, id: newTradeId() })),
+  };
+}
+

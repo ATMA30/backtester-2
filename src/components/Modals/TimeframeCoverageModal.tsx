@@ -112,7 +112,7 @@ export const TimeframeCoverageModal: React.FC = () => {
 
   return (
     <div
-      className="modal-overlay open u-display-flex"
+      className="modal-overlay open coverage-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="tfc-title"

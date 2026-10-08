@@ -466,7 +466,7 @@ export const ImportModal: React.FC = () => {
   return (
     <div
       id="modal-overlay"
-      className="open u-display-flex"
+      className="open import-overlay"
       onClick={(e) => {
         // Fermer démonte la modale et annule la lecture en cours.
         if (e.target === e.currentTarget) closeModal();
@@ -474,11 +474,11 @@ export const ImportModal: React.FC = () => {
     >
       <div id="modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="import-title">
         <div className="modal-header">
-          <div className="modal-title u-display-flex u-align-items-center u-gap-8px" id="import-title">
-            <UploadCloud size={16} strokeWidth={2} className="u-color-38bdf8" />
+          <div className="modal-title modal-title-row" id="import-title">
+            <UploadCloud size={16} strokeWidth={2} className="modal-title-icon" />
             <span>Importer un fichier</span>
           </div>
-          <button className="modal-close u-display-flex u-align-items-center u-justify-content-center" onClick={closeModal} aria-label="Fermer">
+          <button className="modal-close modal-close-btn" onClick={closeModal} aria-label="Fermer">
             <X size={15} strokeWidth={2.4} />
           </button>
         </div>
@@ -506,18 +506,11 @@ export const ImportModal: React.FC = () => {
           </div>
         )}
 
-        <div
+        <button type="button"
           id="modal-drop"
-          role="button"
-          tabIndex={0}
           aria-label="Choisir un ou plusieurs fichiers CSV ou JSON"
-          onClick={() => !isStreaming && fileInputRef.current?.click()}
-          onKeyDown={(e) => {
-            if ((e.key === 'Enter' || e.key === ' ') && !isStreaming) {
-              e.preventDefault();
-              fileInputRef.current?.click();
-            }
-          }}
+          disabled={isStreaming}
+          onClick={() => fileInputRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
@@ -525,24 +518,24 @@ export const ImportModal: React.FC = () => {
           }}
           style={{ cursor: isStreaming ? 'wait' : 'pointer' }}
         >
-          <div className="drop-icon u-display-flex u-align-items-center u-justify-content-center">
-            <FileSpreadsheet size={32} strokeWidth={1.5} className="u-color-38bdf8" />
+          <div className="drop-icon import-drop-icon-center">
+            <FileSpreadsheet size={32} strokeWidth={1.5} className="import-drop-glyph" />
           </div>
           <div className="drop-text" id="drop-filename">{dropLabel}</div>
           <div className="drop-hint">ou cliquez pour sélectionner un ou plusieurs fichiers</div>
           <div className="drop-formats">
             <span className="fmt-badge">CSV</span>
             <span className="fmt-badge">JSON</span>
-            <span className="fmt-badge u-background-rgba-56-189-248-0_15 u-color-38bdf8 u-border-color-rgba-56-189-248-0_3">Multi-fichiers</span>
+            <span className="fmt-badge import-multi-badge">Multi-fichiers</span>
           </div>
-        </div>
+        </button>
 
         <input
           type="file"
           id="file-hidden"
           ref={fileInputRef}
           accept=".csv,.json,.txt"
-          multiple className="u-display-none"
+          multiple className="file-input-hidden"
           onChange={(e) => {
             const picked = Array.from(e.target.files || []);
             // Vider *avant* de traiter : le champ doit être neuf même si

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleHistoryRequest } from './history-core';
+import { HISTORY_API_VERSION } from '../../src/domain/history-api';
 
 const rows = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ time: 1_600_000_000 + i * 3_600, open: 2, high: 3, low: 1, close: 2.5, volume: 10 }));
@@ -37,6 +38,15 @@ describe('handleHistoryRequest — Dukascopy, dev and prod alike', () => {
     expect(dukascopy).not.toHaveBeenCalled();
   });
 
+  it('refuses an API version other than the current one, a way around the CDN cache', async () => {
+    const dukascopy = vi.fn(async () => dukaRates(60));
+    const bust = await handleHistoryRequest(new Request('https://x.test/api/history?symbol=EURUSD&v=r4nd0m'), { dukascopy });
+    expect(bust.status).toBe(400);
+    expect(dukascopy).not.toHaveBeenCalled();
+    const current = await handleHistoryRequest(new Request(`https://x.test/api/history?symbol=EURUSD&interval=1h&range=1y&v=${HISTORY_API_VERSION}`), { dukascopy });
+    expect(current.status).toBe(200);
+  });
+
   it('falls back to Yahoo when Dukascopy is throttled', async () => {
     const timestamps = rows(60).map((r) => r.time);
     const series = timestamps.map(() => 2);
@@ -55,6 +65,9 @@ describe('handleHistoryRequest — Dukascopy, dev and prod alike', () => {
     });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { source: string }).source).toBe('yahoo');
+    // Observable: which source answered, and why Dukascopy did not.
+    expect(res.headers.get('X-History-Source')).toBe('yahoo');
+    expect(res.headers.get('Server-Timing')).toContain('desc="throttled"');
   });
 });
 
@@ -64,7 +77,12 @@ describe('daily forex — real wicks first', () => {
   const day = 86_400;
   const yahooDaily = (from: number, n: number) => {
     // Yahoo stamps daily forex candles at 23:00 UTC the evening before.
-    const timestamps = Array.from({ length: n }, (_, i) => from + i * day - 3_600);
+    // Weekdays only, like a real forex feed (weekend candles would be folded).
+    const timestamps: number[] = [];
+    for (let t = from; timestamps.length < n; t += day) {
+      const weekday = new Date(t * 1000).getUTCDay();
+      if (weekday !== 0 && weekday !== 6) timestamps.push(t - 3_600);
+    }
     const open = timestamps.map(() => 0.9);
     return {
       chart: {

@@ -4,6 +4,7 @@ import { fetchJson, isAbortError, isTimeoutError } from './http';
 import { sanitizeCandles, RawCandleLike } from '../domain/candles';
 import { getInstrument } from '../domain/instruments';
 import { TimeframeSeconds, secondsForInterval } from '../domain/timeframes';
+import { HISTORY_API_VERSION } from '../domain/history-api';
 
 /** Where a series came from. `simulated` means "generated locally, not market data". */
 export type DataProvenance =
@@ -55,7 +56,13 @@ export interface HistoricalRequest {
   readonly range?: string;
   /** Centre the window on this epoch (seconds) — used to anchor replay. */
   readonly targetTimestamp?: number;
-  /** Set false to receive an empty series rather than generated candles. */
+  /**
+   * Set true to generate random Brownian motion candles when all real market
+   * providers fail.
+   *
+   * Defaults to false: an analytical backtesting application must NEVER
+   * silently fabricate fake market data without explicit consent.
+   */
   readonly allowSimulated?: boolean;
   readonly signal?: AbortSignal;
   /**
@@ -218,16 +225,7 @@ async function fetchBinance(
   return sanitizeCandles(rows);
 }
 
-/**
- * Version of what `/api/history` returns, sent with every request.
- *
- * Responses are cached (5 min in the browser, a day at the CDN). When their
- * content changes meaning — daily forex switching from ECB closes to real
- * OHLC — cached copies kept serving candles without wicks after the fix. Bump
- * this whenever the server's output changes: the URL, hence the cache key,
- * changes with it.
- */
-export const HISTORY_API_VERSION = '3';
+export { HISTORY_API_VERSION };
 
 /** `source` reported by `/api/history` → the provenance shown to the user. */
 const SERVER_SOURCES: Readonly<Record<string, DataProvenance>> = {
@@ -408,7 +406,7 @@ export async function fetchHistoricalSeries(request: HistoricalRequest): Promise
   const symbol = request.symbol.toUpperCase();
   const interval = request.interval ?? '1d';
   const range = request.range ?? 'max';
-  const { targetTimestamp, signal, timeoutMs, allowSimulated = true } = request;
+  const { targetTimestamp, signal, timeoutMs, allowSimulated = false } = request;
   const ctx: RequestContext = { signal, timeoutMs };
 
   const attempted: DataProvenance[] = [];

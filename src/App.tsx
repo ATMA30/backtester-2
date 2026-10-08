@@ -13,8 +13,9 @@ import { useReplayStore } from './store/useReplayStore';
 import { useTradeStore } from './store/useTradeStore';
 import { useUIStore, ToastType } from './store/useUIStore';
 import { fetchHistoricalSeries, PROVENANCE_LABELS } from './services/historicalApi';
-import { getDataset } from './services/db';
+import { getDataset, pruneOrphanCaptures } from './services/db';
 import { isClosesOnlySeries } from './domain/candles';
+import { prepareConversionFor } from './services/fxRates';
 import { sound } from './services/audio';
 import { DrawingTool } from './types/drawing';
 import { toggleFullscreen } from './hooks/useFullscreen';
@@ -33,6 +34,7 @@ const IndicatorConfigModal = lazy(() => import('./components/Modals/IndicatorCon
 const TradeHistoryModal = lazy(() => import('./components/Modals/TradeHistoryModal').then((m) => ({ default: m.TradeHistoryModal })));
 const SnapshotModal = lazy(() => import('./components/Modals/SnapshotModal').then((m) => ({ default: m.SnapshotModal })));
 const ShortcutsModal = lazy(() => import('./components/Modals/ShortcutsModal').then((m) => ({ default: m.ShortcutsModal })));
+const ResetAllModal = lazy(() => import('./components/Modals/ResetAllModal').then((m) => ({ default: m.ResetAllModal })));
 
 /** Tool shortcuts, extracted from what used to be a 16-branch if/else chain. */
 const TOOL_SHORTCUTS: Readonly<Record<string, DrawingTool>> = {
@@ -180,6 +182,9 @@ export const App: React.FC = () => {
     // A single catch around both paths: the previous version awaited an unguarded
     // promise, so a malformed localStorage payload threw before the fallback
     // loader ran and left the app permanently empty.
+    // Before anything can close a trade: only saved sessions still hold trades.
+    void pruneOrphanCaptures();
+
     void (async () => {
       // Le `finally` enveloppe les *deux* chemins. Attaché au seul second bloc,
       // il était sauté dès qu'une session sauvegardée était restaurée — le cas
@@ -234,8 +239,8 @@ export const App: React.FC = () => {
     // rendu après coup se lit mal et casserait au premier `set` mutatif.
     const closedCount = trade.closedPositions.length;
     const pendingCount = trade.pendingOrders.length;
-    const hadPosition = trade.activePosition !== null;
-    const hadOpenWork = hadPosition || pendingCount > 0;
+    const openCount = trade.openPositions.length;
+    const hadOpenWork = openCount > 0 || pendingCount > 0;
     const hadHistory = closedCount > 0;
 
     useReplayStore.getState().resetReplay();
@@ -248,7 +253,7 @@ export const App: React.FC = () => {
       // Il dit maintenant ce qui a disparu, et comment ne pas le reperdre.
       const lost = [
         hadHistory ? `${closedCount} trade(s) au journal` : null,
-        hadPosition ? 'la position ouverte' : null,
+        openCount > 0 ? `${openCount} position(s) ouverte(s)` : null,
         pendingCount > 0 ? `${pendingCount} ordre(s) en attente` : null,
       ].filter(Boolean);
 
@@ -267,6 +272,15 @@ export const App: React.FC = () => {
   useEffect(() => {
     setActiveSymbol(currentSymbol);
   }, [currentSymbol, setActiveSymbol]);
+
+  // ── CONVERSION RATES ──────────────────────────────────────
+  // Whatever leg the pair cannot price by itself (the quote of a cross, the
+  // account currency against the dollar) converts with the ECB rate of the
+  // candle's day, loaded here once per currency.
+  const accountCurrency = useTradeStore((s) => s.accountCurrency);
+  useEffect(() => {
+    void prepareConversionFor(currentSymbol);
+  }, [currentSymbol, accountCurrency]);
 
   // ── GLOBAL KEYBOARD SHORTCUTS ─────────────────────────────
   // Stores are read via getState() inside the handler, so the listener is
@@ -388,15 +402,15 @@ export const App: React.FC = () => {
   // ── AUTO-CLOSE DROPDOWNS ON CLICK OUTSIDE ─────────────────
   useEffect(() => {
     if (!activeDropdown) return;
+    // `composedPath()` rather than `target.closest()`: React re-renders between
+    // its own listener and this one, and a click that swaps the menu's content
+    // (a confirmation step) leaves `target` detached, with no ancestor at all —
+    // the menu then closed on its own button.
     const handleOutsideClick = (e: MouseEvent) => {
-      const target = e.target;
-      if (
-        target instanceof Element &&
-        !target.closest('.tv-dropdown') &&
-        !target.closest('.tv-dropdown-menu')
-      ) {
-        useUIStore.getState().closeAllDropdowns();
-      }
+      const inside = e
+        .composedPath()
+        .some((node) => node instanceof Element && node.matches('.tv-dropdown, .tv-dropdown-menu'));
+      if (!inside) useUIStore.getState().closeAllDropdowns();
     };
     window.addEventListener('click', handleOutsideClick);
     return () => window.removeEventListener('click', handleOutsideClick);
@@ -435,6 +449,7 @@ export const App: React.FC = () => {
           {activeModal === 'trade-history' && <TradeHistoryModal />}
           {activeModal === 'snapshot' && <SnapshotModal />}
           {activeModal === 'shortcuts' && <ShortcutsModal />}
+          {activeModal === 'reset-all' && <ResetAllModal />}
         </Suspense>
       </ErrorBoundary>
 

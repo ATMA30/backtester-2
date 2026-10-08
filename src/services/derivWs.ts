@@ -8,9 +8,35 @@ import { sanitizeCandles } from '../domain/candles';
  * nothing and is not a secret, but it is configuration, so it lives here as a
  * named constant rather than inline in a URL.
  */
-const DERIV_WS_URL = 'wss://ws.derivws.com/websockets/v3?app_id=1089';
+const DERIV_WS_ENDPOINTS = [
+  'wss://ws.derivws.com/websockets/v3',
+  'wss://ws.binaryws.com/websockets/v3',
+  'wss://frontend.binaryws.com/websockets/v3',
+];
 
-const CONNECT_TIMEOUT_MS = 8_000;
+export function getDerivAppId(): string {
+  try {
+    const saved = localStorage.getItem('deriv_app_id');
+    if (saved && /^\d+$/.test(saved.trim())) return saved.trim();
+  } catch {
+    // Storage unavailable
+  }
+  return '1089';
+}
+
+export function setDerivAppId(appId: string): void {
+  try {
+    if (appId.trim()) {
+      localStorage.setItem('deriv_app_id', appId.trim());
+    } else {
+      localStorage.removeItem('deriv_app_id');
+    }
+  } catch {
+    // Storage unavailable
+  }
+}
+
+const CONNECT_TIMEOUT_MS = 6_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 /** Deriv caps `ticks_history` at 5000 candles per request. */
 const MAX_CANDLES_PER_REQUEST = 5_000;
@@ -65,7 +91,26 @@ class DerivSession {
     socket.onerror = () => this.failAll(new Error('Erreur de connexion Deriv WebSocket'));
   }
 
-  static open(signal?: AbortSignal): Promise<DerivSession> {
+  static async open(signal?: AbortSignal): Promise<DerivSession> {
+    const appId = getDerivAppId();
+    let lastError: Error = new Error('Impossible de joindre les serveurs Deriv WebSocket');
+
+    for (const base of DERIV_WS_ENDPOINTS) {
+      if (signal?.aborted) throw new Error('Requête Deriv annulée');
+      const url = `${base}?app_id=${appId}`;
+      try {
+        const session = await DerivSession.tryConnect(url, signal);
+        return session;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.warn(`[Deriv] Échec connexion vers ${base}:`, lastError.message);
+      }
+    }
+
+    throw lastError;
+  }
+
+  private static tryConnect(url: string, signal?: AbortSignal): Promise<DerivSession> {
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
         reject(new Error('Requête Deriv annulée'));
@@ -73,7 +118,7 @@ class DerivSession {
       }
       let socket: WebSocket;
       try {
-        socket = new WebSocket(DERIV_WS_URL);
+        socket = new WebSocket(url);
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
         return;

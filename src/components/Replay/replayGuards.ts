@@ -13,10 +13,10 @@ import { useMarketStore } from '../../store/useMarketStore';
  * buttons able to close it. A single guard keeps the rule in one place.
  */
 
-/** True when the account has a position or a pending order. */
+/** True when the account has an open position or a pending order. */
 export function hasOpenTrading(): boolean {
-  const { activePosition, pendingOrders } = useTradeStore.getState();
-  return activePosition !== null || pendingOrders.length > 0;
+  const { openPositions, pendingOrders } = useTradeStore.getState();
+  return openPositions.length > 0 || pendingOrders.length > 0;
 }
 
 /**
@@ -58,7 +58,7 @@ export function blockTradingInThePast(): boolean {
 /**
  * The candle the trader is looking at: the replay cursor's base candle, or the
  * last loaded candle outside a replay. Any manual close must use its price and
- * time — `closePosition('MANUAL')` without them fell back to the entry price
+ * time — `closePosition(id, 'MANUAL')` without them fell back to the entry price
  * (a P&L of exactly zero) and to the wall clock.
  */
 export function currentTradingCandle(): { close: number; time: number } | null {

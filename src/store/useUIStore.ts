@@ -12,6 +12,7 @@ export type ModalType =
   | 'trade-history'
   | 'snapshot'
   | 'shortcuts'
+  | 'reset-all'
   | null;
 
 export type ToastType = 'info' | 'success' | 'warning' | 'error';

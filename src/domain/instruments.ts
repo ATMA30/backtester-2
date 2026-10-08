@@ -12,6 +12,8 @@
  * resolves through `getInstrument()`.
  */
 
+import { usdPerUnitAt } from './fx-rates';
+
 export type AssetClass = 'forex' | 'metal' | 'energy' | 'index' | 'crypto' | 'synthetic';
 
 /** Display groups, in the order the instrument pickers render them. */
@@ -215,17 +217,43 @@ export function formatPrice(symbol: string, price: number): string {
 
 // ── ACCOUNT CURRENCY ─────────────────────────────────────────
 
-/** Currency the simulated account is denominated in. */
-export const ACCOUNT_CURRENCY = 'USD';
+/**
+ * Currencies an account can be denominated in: those the ECB publishes against
+ * the dollar, so every conversion has a daily rate behind it.
+ */
+export const ACCOUNT_CURRENCIES = ['USD', 'EUR', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD'] as const;
+export type AccountCurrency = (typeof ACCOUNT_CURRENCIES)[number];
+
+export function isAccountCurrency(value: unknown): value is AccountCurrency {
+  return typeof value === 'string' && (ACCOUNT_CURRENCIES as readonly string[]).includes(value);
+}
+
+/**
+ * Currency the simulated account is denominated in.
+ *
+ * Module state, like the conversion clock of `fx-rates`: sizing, costs and P&L
+ * all convert through `quoteToAccountRate`, and threading the currency through
+ * each of their signatures would let one call site forget it. The trade store
+ * is the only writer (`setAccountCurrency`), so the two cannot disagree.
+ */
+let accountCurrency: AccountCurrency = 'USD';
+
+export function getAccountCurrency(): AccountCurrency {
+  return accountCurrency;
+}
+
+export function setAccountCurrency(currency: AccountCurrency): void {
+  accountCurrency = currency;
+}
 
 /**
  * Approximate value of one unit of each currency, in USD.
  *
- * Only used to convert the P&L of a cross (EURGBP, GBPJPY…) whose quote
- * currency is not USD and whose USD rate is not on screen. A reference table
- * off by a few percent is a far smaller error than the one it replaces: the
- * P&L was booked in the *quote* currency and displayed in dollars, so one lot
- * of USDJPY moving by one yen showed +$100 000 instead of about +$640.
+ * Only used when no ECB rate is loaded and the instrument's own price cannot
+ * give the conversion. A reference table off by a few percent is a far smaller
+ * error than the one it replaced: the P&L was booked in the *quote* currency
+ * and displayed in dollars, so one lot of USDJPY moving by one yen showed
+ * +$100 000 instead of about +$640.
  */
 const APPROX_USD_PER_UNIT: Readonly<Record<string, number>> = {
   USD: 1,
@@ -258,34 +286,66 @@ export function quoteCurrencyOf(symbol: string): string | null {
 }
 
 /**
+ * USD value of one unit of `currency`, as exactly as `symbol` allows: its own
+ * price when it pairs that currency with the dollar (EURUSD for EUR, USDJPY for
+ * JPY), the ECB rate of the day otherwise, the reference table as a last resort.
+ */
+function usdPerUnit(currency: string, symbol: string, price: number, time?: number | null): number {
+  if (currency === 'USD') return 1;
+  const pair = (symbol || '').trim().toUpperCase();
+  if (quoteCurrencyOf(pair) !== null && Number.isFinite(price) && price > 0) {
+    if (pair.slice(0, 3) === currency && pair.slice(3, 6) === 'USD') return price;
+    if (pair.slice(0, 3) === 'USD' && pair.slice(3, 6) === currency) return 1 / price;
+  }
+  return usdPerUnitAt(currency, time) ?? APPROX_USD_PER_UNIT[currency] ?? 1;
+}
+
+/**
  * Multiplier turning an amount in the instrument's quote currency into the
  * account currency.
  *
- * - quote in USD (EURUSD, metals, indices, USDT crypto, synthetics) → 1;
- * - base in USD (USDJPY, USDCHF, USDCAD) → `1 / price`, exact at that price;
- * - any other cross → reference table above.
+ * - quote in the account currency (EURUSD on a USD account) → 1;
+ * - base in the account currency (USDJPY on a USD account, EURGBP on a EUR
+ *   one) → `1 / price`, exact at that price;
+ * - anything else goes through the dollar, `usdPerUnit(quote) /
+ *   usdPerUnit(account)`, each leg exact when the pair provides it and taken
+ *   from the ECB rate of that day otherwise.
+ *
+ * Instruments that are not forex pairs (metals, indices, crypto, synthetics)
+ * are quoted in USD.
  *
  * @param price Price of the instrument at which the amount is realised.
  */
-export function quoteToAccountRate(symbol: string, price: number): number {
-  const quote = quoteCurrencyOf(symbol);
-  if (quote === null || quote === ACCOUNT_CURRENCY) return 1;
+export function quoteToAccountRate(symbol: string, price: number, time?: number | null): number {
+  const account = accountCurrency;
+  const quote = quoteCurrencyOf(symbol) ?? 'USD';
+  if (quote === account) return 1;
 
   const base = (symbol || '').trim().toUpperCase().slice(0, 3);
-  if (base === ACCOUNT_CURRENCY && Number.isFinite(price) && price > 0) return 1 / price;
+  if (quoteCurrencyOf(symbol) !== null && base === account && Number.isFinite(price) && price > 0) return 1 / price;
 
-  return APPROX_USD_PER_UNIT[quote] ?? 1;
+  const rate = usdPerUnit(quote, symbol, price, time) / usdPerUnit(account, symbol, price, time);
+  return Number.isFinite(rate) && rate > 0 ? rate : 1;
 }
 
-/** Format an amount in the account currency: `+$1,234.56`, `-$12.00`. */
-export function formatMoney(amount: number, { signed = false } = {}): string {
+/**
+ * Format an amount in the account currency: `+$1,234.56`, `-€12.00`.
+ * `currency` for an amount of another account (a saved session).
+ */
+export function formatMoney(
+  amount: number,
+  { signed = false, currency = accountCurrency }: { signed?: boolean; currency?: AccountCurrency } = {}
+): string {
   if (!Number.isFinite(amount)) return '—';
-  const abs = Math.abs(amount).toLocaleString('en-US', {
+  const abs = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+    currencyDisplay: 'narrowSymbol',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  });
+  }).format(Math.abs(amount));
   const sign = amount < 0 ? '-' : signed && amount > 0 ? '+' : '';
-  return `${sign}$${abs}`;
+  return `${sign}${abs}`;
 }
 
 /** Convert a size expressed in base-asset units into standard lots. */

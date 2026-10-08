@@ -302,3 +302,91 @@ export function isClosesOnlySeries(candles: readonly Candle[], sample = 300): bo
   }
   return glued / tail.length > 0.95;
 }
+
+/**
+ * Fold weekend daily candles into the next weekday.
+ *
+ * Dukascopy publishes a short Sunday-evening session as its own daily candle;
+ * TradingView and most brokers fold it into Monday. Shown alone it is a tiny
+ * extra bar every week, which distorts daily patterns (inside days, gaps) and
+ * any indicator counting bars. The weekend candles give Monday its open, their
+ * extremes and volume; Monday keeps its own time and close. A weekend at the
+ * very end of the series (no weekday after it yet) is left as it is.
+ *
+ * For markets closed at the weekend only — never for crypto.
+ */
+export function mergeWeekendDailyCandles(candles: readonly Candle[]): Candle[] {
+  const out: Candle[] = [];
+  // `as`, not an annotation: annotated and initialised to `null`, the variable
+  // is narrowed to `null` for the whole loop and its branches type as `never`.
+  let pending = null as Candle | null;
+
+  for (const candle of candles) {
+    const weekday = new Date(candle.time * 1000).getUTCDay();
+    const isWeekend = weekday === 0 || weekday === 6;
+
+    const held: Candle | null = pending;
+    if (isWeekend) {
+      pending = held
+        ? {
+            time: held.time,
+            open: held.open,
+            high: Math.max(held.high, candle.high),
+            low: Math.min(held.low, candle.low),
+            close: candle.close,
+            volume: held.volume + candle.volume,
+          }
+        : { ...candle };
+      continue;
+    }
+
+    if (held) {
+      out.push({
+        time: candle.time,
+        open: held.open,
+        high: Math.max(held.high, candle.high),
+        low: Math.min(held.low, candle.low),
+        close: candle.close,
+        volume: held.volume + candle.volume,
+      });
+      pending = null;
+    } else {
+      out.push(candle);
+    }
+  }
+
+  if (pending) out.push(pending);
+  return out;
+}
+
+/**
+ * Time of the first real candle when a series *starts* with closes only.
+ *
+ * Some histories are a real OHLC series extended backwards with daily closes
+ * (the ECB fallback, or an imported file of closes): the older part has no
+ * wicks and no volume. That is not a rendering bug, and the chart must say so
+ * rather than let it pass for one. Returns `null` when the series has no such
+ * prefix (all real, or all closes).
+ *
+ * The boundary is the first candle after which most of the next ones have a
+ * wick; the prefix must be long and almost entirely glued to count.
+ */
+export function closesOnlyPrefixEnd(candles: readonly Candle[], window = 20): number | null {
+  const glued = (c: Candle) => c.high === Math.max(c.open, c.close) && c.low === Math.min(c.open, c.close);
+  if (candles.length < window * 2 || !glued(candles[0])) return null;
+
+  let gluedCount = 0;
+  for (let i = 0; i + window <= candles.length; i++) {
+    if (!glued(candles[i])) {
+      let withWicks = 0;
+      for (let k = i; k < i + window; k++) if (!glued(candles[k])) withWicks++;
+      if (withWicks * 2 > window) {
+        // A long, almost uniformly glued prefix, followed by real candles.
+        return i >= window && gluedCount / i > 0.95 ? candles[i].time : null;
+      }
+    } else {
+      gluedCount++;
+    }
+  }
+  return null;
+}

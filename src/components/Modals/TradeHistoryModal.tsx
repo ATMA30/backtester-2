@@ -1,12 +1,16 @@
-import React, { useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useDialogFocus } from '../../hooks/useDialogFocus';
 import { Download, X, BookOpen, Info } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { useTradeStore } from '../../store/useTradeStore';
 import { useMarketStore } from '../../store/useMarketStore';
-import { formatMoney, formatPrice, unitsToLots } from '../../domain/instruments';
+import { formatMoney, unitsToLots } from '../../domain/instruments';
 import { Position } from '../../types/trading';
 import { csvCell } from '../../domain/csv-export';
+import { EMPTY_FILTER, JournalFilter, computeMetrics, filterTrades, formatR, isFilterActive, setupsOf } from '../../domain/journal';
+import { JournalFilters } from './journal/JournalFilters';
+import { TradeRow } from './journal/TradeRow';
+import { isAutoCaptureEnabled, setAutoCaptureEnabled } from '../Chart/useTradeCaptures';
 
 /** Epoch seconds → ISO 8601, readable in any spreadsheet. */
 function isoDate(epochSeconds: number | undefined): string {
@@ -30,11 +34,6 @@ function extent(values: readonly number[]): { min: number; max: number } {
 function formatProfitFactor(value: number): string {
   if (!Number.isFinite(value)) return value > 0 ? '∞' : '—';
   return value.toFixed(2);
-}
-
-function formatR(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '—';
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)} R`;
 }
 
 function signClass(value: number): string {
@@ -78,38 +77,62 @@ const Stat: React.FC<{ label: string; hint: string; value: string; tone?: string
 
 export const TradeHistoryModal: React.FC = () => {
   const { activeModal, closeModal, showToast } = useUIStore();
-  const { closedPositions, getMetrics } = useTradeStore();
+  const { closedPositions, getMetrics, initialBalance, accountCurrency } = useTradeStore();
   const currentSymbol = useMarketStore((m) => m.currentSymbol);
   const costsEnabled = useTradeStore((s) => s.costs.enabled);
+  const [filter, setFilter] = useState<JournalFilter>(EMPTY_FILTER);
+  const [autoCapture, setAutoCapture] = useState(isAutoCaptureEnabled);
+  /** One trade open at a time; it stays listed until closed, filter or not. */
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, activeModal === 'trade-history');
 
+  const setups = useMemo(() => setupsOf(closedPositions), [closedPositions]);
+  const matching = useMemo(() => filterTrades(closedPositions, filter), [closedPositions, filter]);
+  // Renaming the setup of a trade under a setup filter made it vanish on blur,
+  // mid-edit. The open trade stays listed — but out of the statistics — until
+  // the trader closes it.
+  const listed = useMemo(() => {
+    if (expandedId === null || matching.some((t) => t.id === expandedId)) return matching;
+    return closedPositions.filter((t) => t.id === expandedId || matching.includes(t));
+  }, [closedPositions, matching, expandedId]);
+  const trades = matching;
+
   if (activeModal !== 'trade-history') return null;
 
-  const m = getMetrics();
-  const chronological = [...closedPositions].sort(byCloseTime);
+  const filtered = isFilterActive(filter);
+  // A selection is measured on its own: "what would these trades alone give?"
+  const m = filtered ? computeMetrics(trades, initialBalance) : getMetrics();
+  const chronological = [...trades].sort(byCloseTime);
 
   const exportTradeHistory = () => {
-    if (!closedPositions.length) return;
-    const header = 'id,symbol,type,entry,exit,lots,open_time_utc,close_time_utc,pnl_usd,fees_usd,r_multiple,close_reason\n';
+    if (!trades.length) return;
+    const currency = accountCurrency.toLowerCase();
+    const header = `id,symbol,type,entry,exit,lots,open_time_utc,close_time_utc,pnl_${currency},fees_${currency},r_multiple,close_reason,setup,emotion,note\n`;
     const rows = chronological
       .map((p) => {
         const symbol = p.symbol ?? currentSymbol;
-        const r = p.riskAmount && p.pnl !== undefined ? (p.pnl / p.riskAmount).toFixed(2) : '';
+        // Des nombres, pas des chaînes : « -12.50 » en texte était neutralisé en
+        // « '-12.50 » et toute perte exportée devenait du texte dans le tableur.
+        const round2 = (n: number | undefined) => (n === undefined || !Number.isFinite(n) ? undefined : Math.round(n * 100) / 100);
+        const r = p.riskAmount && p.pnl !== undefined ? round2(p.pnl / p.riskAmount) : undefined;
         return [
           p.id,
           symbol,
           p.type,
           p.entry,
           p.exitPrice,
-          unitsToLots(symbol, p.size).toFixed(2),
+          round2(unitsToLots(symbol, p.size)),
           isoDate(p.time),
           isoDate(p.closeTime),
-          p.pnl?.toFixed(2),
-          p.fees?.toFixed(2),
+          round2(p.pnl),
+          round2(p.fees),
           r,
           p.closeReason,
+          p.annotation?.setup,
+          p.annotation?.emotion,
+          p.annotation?.note,
         ]
           .map(csvCell)
           .join(',');
@@ -126,7 +149,7 @@ export const TradeHistoryModal: React.FC = () => {
     // Révoquer au tour suivant : révoquer tout de suite peut annuler le
     // téléchargement sous Firefox et Safari.
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    showToast('Journal exporté en CSV.', 'success');
+    showToast(`${trades.length} trade(s) exporté(s) en CSV.`, 'success');
   };
 
   // Equity curve, in the same order as the drawdown computation.
@@ -152,24 +175,24 @@ export const TradeHistoryModal: React.FC = () => {
   const curveColor = m.totalPnL >= 0 ? 'var(--bull)' : 'var(--bear)';
 
   return (
-    <div id="trade-history-panel" ref={dialogRef} className="open u-display-flex" role="dialog" aria-label="Journal de trades">
+    <div id="trade-history-panel" ref={dialogRef} className="open th-panel-layout" role="dialog" aria-label="Journal de trades">
       <div className="th-header">
-        <div className="th-title u-display-flex u-align-items-center u-gap-7px">
-          <BookOpen size={15} strokeWidth={2} className="u-color-38bdf8" />
+        <div className="th-title th-title-row">
+          <BookOpen size={15} strokeWidth={2} className="th-title-icon" />
           <span>Journal de trades</span>
         </div>
-        <div className="u-display-flex u-align-items-center u-gap-4px">
+        <div className="th-header-actions">
           <button
-            className="th-export u-display-flex u-align-items-center u-justify-content-center"
+            className="th-export th-icon-btn"
             onClick={exportTradeHistory}
-            title="Exporter en CSV"
-            aria-label="Exporter le journal en CSV"
-            disabled={closedPositions.length === 0}
+            title={filtered ? 'Exporter la sélection en CSV' : 'Exporter en CSV'}
+            aria-label={filtered ? 'Exporter la sélection en CSV' : 'Exporter le journal en CSV'}
+            disabled={trades.length === 0}
           >
             <Download size={13} strokeWidth={2} />
           </button>
           <button
-            className="th-close u-display-flex u-align-items-center u-justify-content-center"
+            className="th-close th-icon-btn"
             onClick={closeModal}
             aria-label="Fermer le journal"
           >
@@ -177,6 +200,10 @@ export const TradeHistoryModal: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {closedPositions.length > 0 && (
+        <JournalFilters filter={filter} onChange={setFilter} setups={setups} shown={trades.length} total={closedPositions.length} />
+      )}
 
       {/* Trois chiffres d'abord : combien, est-ce reproductible, à quel prix. */}
       <div className="th-stats th-stats-primary">
@@ -208,9 +235,9 @@ export const TradeHistoryModal: React.FC = () => {
         />
       </div>
 
-      <div id="equity-curve-container" className="u-margin-8px-8px-0 u-height-60px">
+      <div id="equity-curve-container" className="th-equity">
         <svg
-          id="equity-curve" className="u-width-100pct u-height-100pct"
+          id="equity-curve" className="th-equity-svg"
           viewBox={`0 0 ${svgW} ${svgH}`}
           preserveAspectRatio="none"
           role="img"
@@ -234,9 +261,21 @@ export const TradeHistoryModal: React.FC = () => {
 
       <p className={`th-disclaimer ${costsEnabled ? '' : 'is-warning'}`}>
         {costsEnabled
-          ? `Frais inclus : ${formatMoney(m.totalFees)} de spread, commissions et slippage. Solde ${formatMoney(m.balance)}.`
-          : `Frais désactivés : résultats hors spread, commissions et slippage, un compte réel ferait moins bien. Solde ${formatMoney(m.balance)}.`}
+          ? `Frais inclus : ${formatMoney(m.totalFees)} de spread, commissions et slippage. ${filtered ? 'Capital de la sélection' : 'Solde'} ${formatMoney(m.balance)}.`
+          : `Frais désactivés : résultats hors spread, commissions et slippage, un compte réel ferait moins bien. ${filtered ? 'Capital de la sélection' : 'Solde'} ${formatMoney(m.balance)}.`}
       </p>
+
+      <label className="th-capture-toggle">
+        <input
+          type="checkbox"
+          checked={autoCapture}
+          onChange={(e) => {
+            setAutoCaptureEnabled(e.target.checked);
+            setAutoCapture(e.target.checked);
+          }}
+        />
+        <span>Capturer le graphique à chaque clôture</span>
+      </label>
 
       <div className="th-list" id="th-list">
         {closedPositions.length === 0 ? (
@@ -245,35 +284,19 @@ export const TradeHistoryModal: React.FC = () => {
             <br />
             Lancez un replay, passez un ordre avec Acheter ou Vendre : il apparaîtra ici à sa clôture.
           </div>
+        ) : listed.length === 0 ? (
+          <div className="th-empty">Aucun trade ne correspond à ces filtres.</div>
         ) : (
-          closedPositions.map((p) => {
-            const symbol = p.symbol ?? currentSymbol;
-            const pnl = p.pnl ?? 0;
-            const r = p.riskAmount ? pnl / p.riskAmount : null;
-            const tone = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
-            const closedAt = p.closeTime ?? p.time;
-            return (
-              <div key={p.id} className="th-trade-row">
-                <span className={`th-badge ${p.type.toLowerCase()}`}>{p.type === 'LONG' ? 'ACHAT' : 'VENTE'}</span>
-                <div className="th-trade-info">
-                  <div className="th-trade-price">
-                    {/* Precision comes from the instrument catalogue, never from
-                        the magnitude of the price. */}
-                    {formatPrice(symbol, p.entry)} →{' '}
-                    {p.exitPrice === undefined ? '—' : formatPrice(symbol, p.exitPrice)} ·{' '}
-                    {unitsToLots(symbol, p.size).toFixed(2)} lot
-                  </div>
-                  <div className="th-trade-meta">
-                    {new Date(closedAt * 1000).toLocaleString('fr-FR', { timeZone: 'UTC', dateStyle: 'short', timeStyle: 'short' })}{' '}
-                    UTC · {p.closeReason === 'TP' ? 'objectif' : p.closeReason === 'SL' ? 'stop' : 'manuel'}
-                    {r !== null ? ` · ${formatR(r)}` : ''}
-                    {p.fees ? ` · frais ${formatMoney(p.fees)}` : ''}
-                  </div>
-                </div>
-                <div className={`th-trade-pnl ${tone}`}>{formatMoney(pnl, { signed: true })}</div>
-              </div>
-            );
-          })
+          listed.map((p) => (
+            <TradeRow
+              key={p.id}
+              trade={p}
+              fallbackSymbol={currentSymbol}
+              setups={setups}
+              expanded={p.id === expandedId}
+              onToggle={() => setExpandedId((id) => (id === p.id ? null : p.id))}
+            />
+          ))
         )}
       </div>
     </div>

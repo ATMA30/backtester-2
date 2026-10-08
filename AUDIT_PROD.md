@@ -36,6 +36,31 @@
 | Signalé après coup : journalier forex sans mèches | ✅ vrai OHLC d'abord, BCE en prolongement, caches invalidés | `history-core.ts`, `historicalApi.ts`, `App.tsx` |
 | Trouvé en vérifiant : barre de replay qui déborde avec une position ouverte | ✅ retour à la ligne | `index.css` |
 | Dev et prod ne servaient pas les mêmes données (Dukascopy en dev seulement) | ✅ Dukascopy en production, plages partagées avec l'interface, repli Yahoo | `history-core.ts`, `archive-limits.ts` |
+| Signalé : recul impossible au trackpad pendant la lecture | ✅ geste `wheel` traité comme un glisser, bouton « Revenir au présent » | `useChartViewport.ts` |
+| Signalé : barre de replay confuse | ✅ grille à deux rangées, une ligne d'aide | `ReplayBar.tsx`, `index.css` |
+| Tests de bout en bout et CI | ✅ 12 tests Playwright (flux simulé), GitHub Actions | `e2e/`, `.github/workflows/ci.yml` |
+| Suivi de la source effective | ✅ log JSON par requête, `X-History-Source`, `Server-Timing` | `history-core.ts` |
+| Bougie du dimanche (journalier) | ✅ fusionnée dans le lundi, hors crypto | `domain/candles.ts` |
+| Taux des crosses | ✅ taux BCE du jour de la bougie, table en secours | `domain/fx-rates.ts`, `services/fxRates.ts` |
+| Menus en `div` cliquables | ✅ boutons, `label` pour les séances, carte accessible au clavier | `Topbar.tsx`, `ReplayBar.tsx`, `DatasetsModal.tsx` |
+| `!important` des utilitaires | ✅ 196 retirés, rendu identique | `index.css` |
+| `DrawingCanvas.tsx` trop long | ✅ 2 377 → 242 lignes : couches de rendu, projection, détection de clic, interactions, barre flottante ; pixels, interactions et HTML vérifiés identiques | `Chart/canvas/`, `SelectedDrawingToolbar.tsx` |
+| Signalé : marge entre les bougies et l'échelle pendant le défilement | ✅ marge choisie mémorisée (min. 2 bougies), gestes seuls décisionnaires | `useChartViewport.ts` |
+| Signalé : ni mèches ni volumes sur EUR/USD avant 2008 | ✅ Dukascopy journalier dès 1990, frontière des clôtures seules tracée à l'écran | `archive-limits.ts`, `canvas/boundary.ts` |
+| Replay lent sur les gros historiques | ✅ agrégation incrémentale, `update()` en fin de série, fenêtre de 20 000 barres : 500 000 bougies à 32× passent de 0,6 à 48 bougies/s, sans tâche longue | `replay-aggregator.ts`, `TradingChart.tsx` |
+| CSP : `'unsafe-inline'` dans `style-src` | ✅ retiré ; seule la feuille du logo lightweight-charts est autorisée, par empreinte ; test e2e sur le build | `netlify.toml`, `e2e/csp.prod.e2e.ts` |
+| Journal de trading (setup, émotion, note, capture ; filtres date, sens, setup) | ✅ statistiques et export recalculés sur la sélection | `domain/journal.ts`, `Modals/journal/`, `useTradeCaptures.ts` |
+| Une seule position à la fois | ✅ plusieurs positions, achat et vente ensemble, chacune pilotable sur le graphique et dans la barre | `useTradeStore.ts`, `OpenPositionsMenu.tsx`, `canvas/` |
+| Compte en USD uniquement | ✅ USD, EUR, GBP, CHF, JPY, CAD, AUD ; conversion exacte quand la paire suffit, BCE sinon | `domain/instruments.ts`, `AccountMenu.tsx` |
+| Tests de composants, couverture | ✅ Testing Library, couverture v8 avec plancher, en CI | `vitest.config.ts`, `*.test.tsx` |
+| Revue sécurité (25/09) : injection CSV via `;`, symbole et ids de session, purge des captures, version d'API contournant le CDN, `form-action`, COOP | ✅ | `csv-export.ts`, `session.ts`, `db.ts`, `history-core.ts`, `netlify.toml` |
+| Revue de code (25/09) : chemin de performance non testé, badges superposés à un même prix | ✅ fonctions extraites et testées, badges décalés, détection de clic en deux passes | `series-diff.ts`, `positionLayout.ts`, `hitTesting.ts` |
+| `index.css` de 5 300 lignes, classes générées illisibles | ✅ onze feuilles par zone, 218 classes nommées, utilitaires supprimés ; rendu identique sur 29 vues | `src/styles/` |
+| `Topbar.tsx` trop long | ✅ 722 → 103 lignes, huit menus ; rendu et texte identiques | `components/Topbar/` |
+| `ReplayBar.tsx`, `TradingChart.tsx`, `DatasetsModal.tsx` trop longs | ✅ 1 025 → 154, 841 → 249, 631 → 82 lignes ; rendu identique, performance du replay inchangée | `components/Replay/`, `components/Chart/`, `Modals/datasets/` |
+| Tests e2e instables sous charge, parcours non couverts | ✅ attentes en bougies jouées ; 35 tests (ordres, sessions, tracés, indicateurs, unités de temps, clavier, export CSV), 105/105 en trois passes | `e2e/` |
+| Trouvé en fiabilisant : molette lente bloquée à la marge minimale | ✅ un geste parti du bord qui recule passe dans l'historique | `useChartViewport.ts` |
+| Flux temps réel | ❓ décision produit en attente | — |
 | Revue sécurité : injection de formules dans l'export CSV (moyen) | ✅ | `domain/csv-export.ts` |
 | Revue sécurité : `splitRow` quadratique, tampon non borné, plafonds, cache CDN | ✅ | `csv.ts`, `csv-stream.ts`, `session.ts`, `history.ts` |
 | Revue sécurité : proxy du serveur de dev (CORS `*`) | ✅ le dev utilise le handler de production | `vite.config.ts` |

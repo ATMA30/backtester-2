@@ -12,14 +12,14 @@ export const ShortcutsModal: React.FC = () => {
   if (activeModal !== 'shortcuts') return null;
 
   return (
-    <div id="shortcuts-overlay" className="open u-display-flex u-opacity-1" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+    <div id="shortcuts-overlay" className="open modal-overlay-open" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
       <div className="shortcuts-box" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Raccourcis clavier">
-        <div className="shortcuts-title u-display-flex u-align-items-center u-justify-content-space-between">
-          <div className="u-display-flex u-align-items-center u-gap-8px">
-            <Keyboard size={16} strokeWidth={2} className="u-color-38bdf8" />
+        <div className="shortcuts-title shortcuts-header">
+          <div className="modal-title-row">
+            <Keyboard size={16} strokeWidth={2} className="modal-title-icon" />
             <span>Raccourcis clavier</span>
           </div>
-          <button className="shortcuts-close u-display-flex u-align-items-center u-justify-content-center" onClick={closeModal}>
+          <button className="shortcuts-close modal-close-btn" onClick={closeModal}>
             <X size={15} strokeWidth={2.4} />
           </button>
         </div>

@@ -1,8 +1,15 @@
 import { create } from 'zustand';
 import { Candle } from '../types/market';
-import { Position, PositionType, PendingOrder, TradeMetrics } from '../types/trading';
+import { Position, PositionType, PendingOrder, TradeAnnotation, TradeMetrics } from '../types/trading';
+import { computeMetrics, parseAnnotation } from '../domain/journal';
 import { sound } from '../services/audio';
-import { quoteToAccountRate, unitsToLots } from '../domain/instruments';
+import {
+  AccountCurrency,
+  isAccountCurrency,
+  quoteToAccountRate,
+  setAccountCurrency as setDomainAccountCurrency,
+  unitsToLots,
+} from '../domain/instruments';
 import {
   CostSettings,
   DEFAULT_COST_SETTINGS,
@@ -39,10 +46,16 @@ export interface TradeSnapshot {
   initialBalance: number;
   riskPercent: number;
   quantity: number;
-  activePosition: Position | null;
+  /** Currency of `balance` and of every amount below. */
+  accountCurrency: AccountCurrency;
+  /** Every position still open, oldest first. Long and short may coexist. */
+  openPositions: Position[];
   pendingOrders: PendingOrder[];
   closedPositions: Position[];
 }
+
+/** A snapshot as saved, including the shape of sessions from before several positions. */
+export type RestorableTradeState = Partial<TradeSnapshot> & { activePosition?: Position | null };
 
 export interface OpenTradeInput {
   readonly symbol: string;
@@ -82,13 +95,21 @@ interface TradeState extends TradeSnapshot {
    */
   costs: CostSettings;
   setCosts: (patch: Partial<CostSettings>) => void;
+  /**
+   * Denominate the account in `currency`. The balance and every booked result
+   * are amounts in the old currency, so this opens a fresh account: the caller
+   * asks first when there is anything to lose.
+   */
+  setAccountCurrency: (currency: AccountCurrency) => void;
   /** Close the whole position at market: the bid for a long, the ask for a short. */
-  closeAtMarket: (bid: number, closeTime?: number) => void;
+  closeAtMarket: (id: string, bid: number, closeTime?: number) => void;
+  /** Close every open position at market. */
+  closeAllAtMarket: (bid: number, closeTime?: number) => void;
   setRiskPercent: (risk: number) => void;
   setQuantity: (qty: number) => void;
   openTrade: (input: OpenTradeInput) => OrderOutcome;
   placePendingOrder: (input: PlaceOrderInput) => OrderOutcome;
-  updateActivePositionSlTp: (sl: number | null, tp: number | null) => void;
+  updatePositionSlTp: (id: string, sl: number | null, tp: number | null) => void;
   updatePendingOrder: (
     id: string,
     updates: { targetPrice?: number; sl?: number | null; tp?: number | null }
@@ -100,6 +121,7 @@ interface TradeState extends TradeSnapshot {
    * the trade's fees for display only (it is already inside the price).
    */
   closePosition: (
+    id: string,
     reason?: 'TP' | 'SL' | 'MANUAL',
     exitPrice?: number,
     closeTime?: number,
@@ -109,12 +131,17 @@ interface TradeState extends TradeSnapshot {
    * Close `percent` of the position at market. `bid` is the displayed price;
    * `closeTime` is the replay candle's time — omit it only outside a replay.
    */
-  closePartial: (percent: number, bid: number, closeTime?: number) => void;
-  setBreakeven: () => void;
+  closePartial: (id: string, percent: number, bid: number, closeTime?: number) => void;
+  /** Move the stop of `id` to its entry price, or of every open position without `id`. */
+  setBreakeven: (id?: string) => void;
+  /** Merge journal fields into an open or closed position. */
+  annotate: (id: string, patch: TradeAnnotation) => void;
+  /** Record that the chart capture of `id` is stored. */
+  markScreenshot: (id: string, stored: boolean) => void;
   updatePrice: (tick: PriceTick | number, currentTime?: number) => void;
   resetAccount: () => void;
   /** `symbol`, when given, binds the restored account to that instrument. */
-  restoreTradeState: (restored: Partial<TradeSnapshot>, symbol?: string) => void;
+  restoreTradeState: (restored: RestorableTradeState, symbol?: string) => void;
   getMetrics: () => TradeMetrics;
 }
 
@@ -123,10 +150,12 @@ const INITIAL_SNAPSHOT: TradeSnapshot = {
   initialBalance: DEFAULT_BALANCE,
   riskPercent: DEFAULT_RISK_PERCENT,
   quantity: DEFAULT_QUANTITY_LOTS,
-  activePosition: null,
+  accountCurrency: 'USD',
+  openPositions: [],
   pendingOrders: [],
   closedPositions: [],
 };
+
 
 /** Coerce an untrusted number (session file, IndexedDB) to a usable value. */
 function safeNumber(value: unknown, fallback: number, { min = -Infinity } = {}): number {
@@ -197,6 +226,8 @@ function safePositions(value: unknown): Position[] {
         ...position,
         riskAmount: risk !== undefined && risk > 0 ? risk : undefined,
         fees: fees !== undefined && fees >= 0 ? fees : undefined,
+        annotation: parseAnnotation(position.annotation),
+        hasScreenshot: position.hasScreenshot === true ? true : undefined,
       };
     });
 }
@@ -240,6 +271,32 @@ function saveCosts(costs: CostSettings): void {
   }
 }
 
+const CURRENCY_KEY = 'backtest-account-currency-v1';
+
+function loadCurrency(): AccountCurrency {
+  try {
+    const raw = localStorage.getItem(CURRENCY_KEY);
+    return isAccountCurrency(raw) ? raw : 'USD';
+  } catch {
+    return 'USD';
+  }
+}
+
+/** The store and the conversion code must agree: this is the only writer of both. */
+function applyCurrency(currency: AccountCurrency): void {
+  setDomainAccountCurrency(currency);
+  try {
+    localStorage.setItem(CURRENCY_KEY, currency);
+  } catch {
+    // Storage unavailable: the choice lasts for this session.
+  }
+}
+
+/** Replace the position `id` in `list` with `update(position)`. */
+function replaceById(list: Position[], id: string, update: (p: Position) => Position): Position[] {
+  return list.map((p) => (p.id === id ? update(p) : p));
+}
+
 /**
  * Loss at the stop, frozen at entry, commissions included. `undefined` without
  * a stop. A short's stop triggers on the ask, so it executes at the stop level
@@ -280,12 +337,42 @@ function readTick(tick: PriceTick | number, currentTime?: number) {
   };
 }
 
+/**
+ * Told of every fill that closes, full or partial, right after it is booked.
+ *
+ * An event rather than state: restoring a session also changes
+ * `closedPositions`, and what listens here (the chart capture) must react to a
+ * trade closing now, never to history arriving.
+ */
+type CloseListener = (closed: Position) => void;
+const closeListeners = new Set<CloseListener>();
+
+export function onPositionClosed(listener: CloseListener): () => void {
+  closeListeners.add(listener);
+  return () => closeListeners.delete(listener);
+}
+
+function notifyClosed(closed: Position): void {
+  for (const listener of closeListeners) {
+    try {
+      listener(closed);
+    } catch (error) {
+      console.error('[trade] close listener failed:', error);
+    }
+  }
+}
+
 export const useTradeStore = create<TradeState>((set, get) => {
   /** Costs of `symbol` at `price` under the current settings. */
   const costsOf = (symbol: string | undefined, price: number) => resolveCosts(symbol ?? '', price, get().costs);
+  const findOpen = (id: string) => get().openPositions.find((p) => p.id === id) ?? null;
+
+  const initialCurrency = loadCurrency();
+  setDomainAccountCurrency(initialCurrency);
 
   return {
   ...INITIAL_SNAPSHOT,
+  accountCurrency: initialCurrency,
   accountSymbol: null,
   costs: loadCosts(),
 
@@ -297,18 +384,20 @@ export const useTradeStore = create<TradeState>((set, get) => {
     set({ costs });
   },
 
+  setAccountCurrency: (currency) => {
+    if (!isAccountCurrency(currency)) return;
+    applyCurrency(currency);
+    const { riskPercent, quantity } = get();
+    set({ ...INITIAL_SNAPSHOT, riskPercent, quantity, accountCurrency: currency });
+  },
+
   setRiskPercent: (riskPercent) =>
     set({ riskPercent: safeNumber(riskPercent, DEFAULT_RISK_PERCENT, { min: 0 }) }),
 
   setQuantity: (quantity) => set({ quantity: safeNumber(quantity, DEFAULT_QUANTITY_LOTS, { min: 0 }) }),
 
   openTrade: ({ symbol, type, entry: bid, sl, tp, time, lots }) => {
-    const { balance, riskPercent, quantity, activePosition } = get();
-
-    if (activePosition) {
-      sound.playError();
-      return { ok: false, reason: 'POSITION_ALREADY_OPEN' };
-    }
+    const { balance, riskPercent, quantity } = get();
 
     // `entry` is the displayed (bid) price; a buy pays the ask.
     const costs = costsOf(symbol, bid);
@@ -346,7 +435,7 @@ export const useTradeStore = create<TradeState>((set, get) => {
       status: 'OPEN',
     };
 
-    set({ activePosition: position });
+    set({ openPositions: [...get().openPositions, position] });
     sound.playClick();
     return { ok: true, id: position.id };
   },
@@ -387,10 +476,9 @@ export const useTradeStore = create<TradeState>((set, get) => {
     return { ok: true, id: order.id };
   },
 
-  updateActivePositionSlTp: (sl, tp) => {
-    const { activePosition } = get();
-    if (!activePosition) return;
-    set({ activePosition: { ...activePosition, sl, tp } });
+  updatePositionSlTp: (id, sl, tp) => {
+    if (!findOpen(id)) return;
+    set({ openPositions: replaceById(get().openPositions, id, (p) => ({ ...p, sl, tp })) });
     sound.playClick();
   },
 
@@ -402,20 +490,21 @@ export const useTradeStore = create<TradeState>((set, get) => {
   cancelPendingOrder: (id) =>
     set((state) => ({ pendingOrders: state.pendingOrders.filter((o) => o.id !== id) })),
 
-  closePosition: (reason = 'MANUAL', exitPrice, closeTime, exitCostPerUnit = 0) => {
-    const { activePosition, closedPositions, balance } = get();
-    if (!activePosition) return;
+  closePosition: (id, reason = 'MANUAL', exitPrice, closeTime, exitCostPerUnit = 0) => {
+    const position = findOpen(id);
+    if (!position) return;
+    const { closedPositions, balance, openPositions } = get();
 
-    const exit = Number.isFinite(exitPrice) ? (exitPrice as number) : activePosition.entry;
+    const exit = Number.isFinite(exitPrice) ? (exitPrice as number) : position.entry;
     const at = Number.isFinite(closeTime) ? (closeTime as number) : Date.now() / 1000;
-    const { symbol, size } = activePosition;
+    const { symbol, size } = position;
     // Entry and exit commissions, charged when the trade is booked.
     const commission = 2 * commissionFor(symbol ?? '', size, costsOf(symbol, exit));
-    const pnl = computePnl(activePosition.type, activePosition.entry, exit, size, symbol) - commission;
-    const fees = (activePosition.fees ?? 0) + costAmount(symbol, exitCostPerUnit, size, exit) + commission;
+    const pnl = computePnl(position.type, position.entry, exit, size, symbol) - commission;
+    const fees = (position.fees ?? 0) + costAmount(symbol, exitCostPerUnit, size, exit) + commission;
 
     const closed: Position = {
-      ...activePosition,
+      ...position,
       status: 'CLOSED',
       exitPrice: exit,
       closeTime: at,
@@ -432,55 +521,59 @@ export const useTradeStore = create<TradeState>((set, get) => {
 
     set({
       balance: balance + pnl,
-      activePosition: null,
+      openPositions: openPositions.filter((p) => p.id !== id),
       closedPositions: [closed, ...closedPositions],
     });
+    notifyClosed(closed);
   },
 
-  closeAtMarket: (bid, closeTime) => {
-    const { activePosition } = get();
-    if (!activePosition || !Number.isFinite(bid) || bid <= 0) return;
-    const exit = marketExitPrice(activePosition.type, bid, costsOf(activePosition.symbol, bid));
-    get().closePosition('MANUAL', exit, closeTime, exit - bid);
+  closeAtMarket: (id, bid, closeTime) => {
+    const position = findOpen(id);
+    if (!position || !Number.isFinite(bid) || bid <= 0) return;
+    const exit = marketExitPrice(position.type, bid, costsOf(position.symbol, bid));
+    get().closePosition(id, 'MANUAL', exit, closeTime, exit - bid);
   },
 
-  closePartial: (percent, bid, closeTime) => {
-    const { activePosition, closedPositions, balance } = get();
-    if (!activePosition) return;
+  closeAllAtMarket: (bid, closeTime) => {
+    for (const { id } of get().openPositions) get().closeAtMarket(id, bid, closeTime);
+  },
+
+  closePartial: (id, percent, bid, closeTime) => {
+    const position = findOpen(id);
+    if (!position) return;
     if (!Number.isFinite(percent) || percent <= 0 || percent >= 100) return;
     if (!Number.isFinite(bid) || bid <= 0) return;
 
     // Un reliquat sous le demi-lot minimum n'est plus une position : clôture totale.
-    const leftover = activePosition.size * (1 - percent / 100);
-    if (unitsToLots(activePosition.symbol ?? '', leftover) < MIN_LOT / 2) {
-      get().closeAtMarket(bid, closeTime);
+    const leftover = position.size * (1 - percent / 100);
+    if (unitsToLots(position.symbol ?? '', leftover) < MIN_LOT / 2) {
+      get().closeAtMarket(id, bid, closeTime);
       return;
     }
 
-    const { symbol } = activePosition;
+    const { closedPositions, balance, openPositions } = get();
+    const { symbol } = position;
     const costs = costsOf(symbol, bid);
-    const currentPrice = marketExitPrice(activePosition.type, bid, costs);
-    const closedSize = activePosition.size * (percent / 100);
-    const remainingSize = activePosition.size - closedSize;
+    const currentPrice = marketExitPrice(position.type, bid, costs);
+    const closedSize = position.size * (percent / 100);
+    const remainingSize = position.size - closedSize;
     const commission = 2 * commissionFor(symbol ?? '', closedSize, costs);
-    const pnl =
-      computePnl(activePosition.type, activePosition.entry, currentPrice, closedSize, symbol) - commission;
+    const pnl = computePnl(position.type, position.entry, currentPrice, closedSize, symbol) - commission;
     const share = percent / 100;
-    const entryFees = activePosition.fees ?? 0;
+    const entryFees = position.fees ?? 0;
     // Replay time, not wall-clock time. `Date.now()` dated every partial close
     // in 2026 inside a 2019 replay; `getMetrics` sorts by `closeTime`, so the
     // partial landed at the end of the equity curve and skewed the drawdown.
     const at = Number.isFinite(closeTime) ? (closeTime as number) : Date.now() / 1000;
 
     const closedPart: Position = {
-      ...activePosition,
+      ...position,
       // A partial close is a distinct fill: reusing the parent id made the two
       // rows indistinguishable in the history and in any id-keyed lookup.
       id: newId('trade'),
       size: closedSize,
       // The risk splits with the size, or each half would claim the whole.
-      riskAmount:
-        activePosition.riskAmount === undefined ? undefined : activePosition.riskAmount * (percent / 100),
+      riskAmount: position.riskAmount === undefined ? undefined : position.riskAmount * share,
       status: 'CLOSED',
       exitPrice: currentPrice,
       closeTime: at,
@@ -488,6 +581,8 @@ export const useTradeStore = create<TradeState>((set, get) => {
       pnl,
       fees: entryFees * share + costAmount(symbol, currentPrice - bid, closedSize, currentPrice) + commission,
       pnlPercent: balance > 0 ? (pnl / balance) * 100 : 0,
+      // The capture belongs to the fill it was taken for.
+      hasScreenshot: undefined,
     };
 
     if (pnl > 0) sound.playOrderWin();
@@ -495,29 +590,52 @@ export const useTradeStore = create<TradeState>((set, get) => {
 
     set({
       balance: balance + pnl,
-      activePosition: {
-        ...activePosition,
+      openPositions: replaceById(openPositions, id, (p) => ({
+        ...p,
         size: remainingSize,
         fees: entryFees * (1 - share),
-        riskAmount:
-          activePosition.riskAmount === undefined
-            ? undefined
-            : activePosition.riskAmount * (1 - percent / 100),
-      },
+        riskAmount: p.riskAmount === undefined ? undefined : p.riskAmount * (1 - share),
+      })),
       closedPositions: [closedPart, ...closedPositions],
+    });
+    notifyClosed(closedPart);
+  },
+
+  setBreakeven: (id) => {
+    const { openPositions } = get();
+    if (openPositions.length === 0 || (id !== undefined && !findOpen(id))) return;
+    set({
+      openPositions: openPositions.map((p) => (id === undefined || p.id === id ? { ...p, sl: p.entry } : p)),
+    });
+    sound.playClick();
+  },
+
+  annotate: (id, patch) => {
+    const merge = (p: Position): Position => {
+      const annotation = parseAnnotation({ ...p.annotation, ...patch });
+      // Emptied: the field goes, rather than lingering as `annotation: undefined`.
+      const { annotation: _previous, ...rest } = p;
+      return annotation ? { ...rest, annotation } : rest;
+    };
+    const { openPositions, closedPositions } = get();
+    set({
+      openPositions: replaceById(openPositions, id, merge),
+      closedPositions: replaceById(closedPositions, id, merge),
     });
   },
 
-  setBreakeven: () => {
-    const { activePosition } = get();
-    if (!activePosition) return;
-    set({ activePosition: { ...activePosition, sl: activePosition.entry } });
-    sound.playClick();
+  markScreenshot: (id, stored) => {
+    const mark = (p: Position): Position => ({ ...p, hasScreenshot: stored ? true : undefined });
+    const { openPositions, closedPositions } = get();
+    set({
+      openPositions: replaceById(openPositions, id, mark),
+      closedPositions: replaceById(closedPositions, id, mark),
+    });
   },
 
   /**
    * Advance the simulation by one price tick: fill eligible pending orders, then
-   * test the open position against its stop and target.
+   * test every open position against its stop and target.
    *
    * Fills use the candle body so gaps are honoured — a long stop below a gapped
    * open fills at the open (worse), a long target above a gapped open fills at
@@ -535,12 +653,11 @@ export const useTradeStore = create<TradeState>((set, get) => {
     const { close, open, high, low, time } = readTick(tick, currentTime);
     if (!Number.isFinite(close)) return;
 
-    const { pendingOrders, activePosition } = get();
+    const { pendingOrders } = get();
 
     if (pendingOrders.length > 0) {
       const remaining: PendingOrder[] = [];
-      let activated: Position | null = null;
-      let changed = false;
+      const activated: Position[] = [];
 
       for (const order of pendingOrders) {
         if (time <= (order.lastCheckedTime ?? order.time)) {
@@ -573,9 +690,8 @@ export const useTradeStore = create<TradeState>((set, get) => {
         const entryCostPerUnit =
           (order.type === 'LONG' ? costs.spread : 0) + (order.orderType === 'STOP' ? costs.slippage : 0);
 
-        // Only one position at a time: any other triggered order stays pending.
-        if (triggered && !activated && !activePosition) {
-          activated = {
+        if (triggered) {
+          activated.push({
             id: newId('trade'),
             symbol: order.symbol,
             type: order.type,
@@ -587,147 +703,89 @@ export const useTradeStore = create<TradeState>((set, get) => {
             fees: costAmount(order.symbol, entryCostPerUnit, order.size, fill),
             time,
             status: 'OPEN',
-          };
-          changed = true;
-          sound.playClick();
+          });
         } else {
           remaining.push({ ...order, lastCheckedTime: time });
-          changed = true;
         }
       }
 
-      if (activated) set({ pendingOrders: remaining, activePosition: activated });
-      else if (changed) set({ pendingOrders: remaining });
+      if (activated.length > 0) sound.playClick();
+      set({ pendingOrders: remaining, openPositions: [...get().openPositions, ...activated] });
     }
 
-    const position = get().activePosition;
-    if (!position) return;
+    // Snapshot the list: closing a position rewrites `openPositions`.
+    for (const position of get().openPositions) {
+      // A position filled by a pending order on this very candle is tested on
+      // it too (stop first): the fill and the extremes share the candle, and
+      // the pessimistic reading is the right default. Any other position only
+      // reacts to candles after the last one it saw.
+      const filledThisTick = position.time === time && position.lastCheckedTime === undefined;
+      if (!filledThisTick && time <= (position.lastCheckedTime ?? position.time)) continue;
 
-    // A position filled by a pending order on this very candle is tested on it
-    // too (stop first): the fill and the extremes share the candle, and the
-    // pessimistic reading is the right default. Any other position only reacts
-    // to candles after the last one it saw.
-    const filledThisTick = position.time === time && position.lastCheckedTime === undefined;
-    if (!filledThisTick && time <= (position.lastCheckedTime ?? position.time)) return;
+      // A long exits on the bid (the candle as drawn); a short buys back on the
+      // ask, so its stop and target are tested against `price + spread`. Stops
+      // execute at market and suffer slippage; targets are limits.
+      const { closePosition } = get();
+      const costs = costsOf(position.symbol, close);
+      const { id } = position;
+      if (position.type === 'LONG') {
+        if (position.sl !== null && low <= position.sl) {
+          closePosition(id, 'SL', Math.min(open, position.sl) - costs.slippage, time, costs.slippage);
+          continue;
+        }
+        if (position.tp !== null && high >= position.tp) {
+          closePosition(id, 'TP', Math.max(open, position.tp), time);
+          continue;
+        }
+      } else {
+        const s = costs.spread;
+        if (position.sl !== null && high + s >= position.sl) {
+          closePosition(id, 'SL', Math.max(open + s, position.sl) + costs.slippage, time, s + costs.slippage);
+          continue;
+        }
+        if (position.tp !== null && low + s <= position.tp) {
+          closePosition(id, 'TP', Math.min(open + s, position.tp), time, s);
+          continue;
+        }
+      }
 
-    // A long exits on the bid (the candle as drawn); a short buys back on the
-    // ask, so its stop and target are tested against `price + spread`. Stops
-    // execute at market and suffer slippage; targets are limits.
-    const { closePosition } = get();
-    const costs = costsOf(position.symbol, close);
-    if (position.type === 'LONG') {
-      if (position.sl !== null && low <= position.sl) {
-        closePosition('SL', Math.min(open, position.sl) - costs.slippage, time, costs.slippage);
-        return;
-      }
-      if (position.tp !== null && high >= position.tp) {
-        closePosition('TP', Math.max(open, position.tp), time);
-        return;
-      }
-    } else {
-      const s = costs.spread;
-      if (position.sl !== null && high + s >= position.sl) {
-        closePosition('SL', Math.max(open + s, position.sl) + costs.slippage, time, s + costs.slippage);
-        return;
-      }
-      if (position.tp !== null && low + s <= position.tp) {
-        closePosition('TP', Math.min(open + s, position.tp), time, s);
-        return;
-      }
+      set({ openPositions: replaceById(get().openPositions, id, (p) => ({ ...p, lastCheckedTime: time })) });
     }
-
-    set({ activePosition: { ...position, lastCheckedTime: time } });
   },
 
-  resetAccount: () => set({ ...INITIAL_SNAPSHOT }),
+  resetAccount: () => set({ ...INITIAL_SNAPSHOT, accountCurrency: get().accountCurrency }),
 
   /**
    * Restore a snapshot from IndexedDB or an imported session file.
    * Every field is validated: session files are exchanged between users, so the
    * payload is untrusted input, not a typed object.
+   *
+   * Sessions saved before several positions could be open carry a single
+   * `activePosition`; those saved before the currency could change were in USD.
    */
-  restoreTradeState: (restored, symbol) =>
+  restoreTradeState: (restored, symbol) => {
+    const legacy = restored.activePosition;
+    const open = Array.isArray(restored.openPositions) ? restored.openPositions : legacy ? [legacy] : [];
+    const currency = isAccountCurrency(restored.accountCurrency) ? restored.accountCurrency : 'USD';
+    applyCurrency(currency);
     set({
       ...(symbol ? { accountSymbol: symbol } : {}),
       balance: safeNumber(restored.balance, DEFAULT_BALANCE),
       initialBalance: safeNumber(restored.initialBalance, DEFAULT_BALANCE),
       riskPercent: safeNumber(restored.riskPercent, DEFAULT_RISK_PERCENT, { min: 0 }),
       quantity: safeNumber(restored.quantity, DEFAULT_QUANTITY_LOTS, { min: 0 }),
-      activePosition: safePositions(restored.activePosition ? [restored.activePosition] : [])[0] ?? null,
+      accountCurrency: currency,
+      openPositions: safePositions(open),
       pendingOrders: safeOrders(restored.pendingOrders),
       closedPositions: safePositions(restored.closedPositions),
-    }),
+    });
+  },
 
   getMetrics: (): TradeMetrics => {
     const { balance, initialBalance, closedPositions } = get();
-
-    let wins = 0;
-    let losses = 0;
-    let grossProfit = 0;
-    let grossLoss = 0;
-
-    for (const p of closedPositions) {
-      const pnl = p.pnl ?? 0;
-      if (pnl > 0) {
-        wins++;
-        grossProfit += pnl;
-      } else if (pnl < 0) {
-        losses++;
-        grossLoss += -pnl;
-      }
-    }
-
-    // Order by close time rather than trusting insertion order: a restored or
-    // imported session can arrive in any order, and the equity curve — hence the
-    // drawdown — is meaningless if replayed out of sequence.
-    const chronological = [...closedPositions].sort(
-      (a, b) => (a.closeTime ?? a.time) - (b.closeTime ?? b.time)
-    );
-
-    let peak = initialBalance;
-    let equity = initialBalance;
-    let maxDrawdown = 0;
-
-    for (const position of chronological) {
-      equity += position.pnl ?? 0;
-      if (equity > peak) peak = equity;
-      if (peak > 0) {
-        const drawdown = ((peak - equity) / peak) * 100;
-        if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-      }
-    }
-
-    const total = closedPositions.length;
-
-    let rSum = 0;
-    let rCount = 0;
-    let totalFees = 0;
-    for (const p of closedPositions) {
-      if (Number.isFinite(p.fees)) totalFees += p.fees as number;
-      if (p.riskAmount && p.riskAmount > 0 && Number.isFinite(p.pnl)) {
-        rSum += (p.pnl as number) / p.riskAmount;
-        rCount++;
-      }
-    }
-
-    return {
-      balance,
-      initialBalance,
-      totalTrades: total,
-      winningTrades: wins,
-      losingTrades: losses,
-      winRate: total > 0 ? (wins / total) * 100 : 0,
-      // Infinity is the honest value for "profits, no losses"; the previous
-      // sentinel of 99 was indistinguishable from a real profit factor of 99.
-      profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
-      maxDrawdown: Math.round(maxDrawdown * 100) / 100,
-      totalPnL: balance - initialBalance,
-      expectancy: total > 0 ? (grossProfit - grossLoss) / total : 0,
-      averageWin: wins > 0 ? grossProfit / wins : 0,
-      averageLoss: losses > 0 ? grossLoss / losses : 0,
-      averageR: rCount > 0 ? rSum / rCount : null,
-      totalFees,
-    };
+    // The balance is the account's own figure: it is what every other screen shows.
+    const metrics = computeMetrics(closedPositions, initialBalance);
+    return { ...metrics, balance, totalPnL: balance - initialBalance };
   },
 };
 });

@@ -1,0 +1,91 @@
+/* Jetons de design : Void Panel Utilitarian Design System */
+
+/* ══════════════════════════════════════════════════════════════════
+   DESIGN TOKENS — Void Panel Utilitarian
+   Near-black flat-panel system on true-black page voids, Inter-only
+   type at heavy display weight, rationed blue accent, and full-pill
+   white primary CTA.
+══════════════════════════════════════════════════════════════════ */
+:root {
+  /* Hauteur de la barre d'état. */
+  --statusbar-h: 23px;
+
+  /* Surfaces — Void Panel Utilitarian (#000000 voids + #111111 / #1A1A1A shelves) */
+  --bg-base:       #000000; /* True-Black Page Void (~66% pixel share) */
+  --bg-surface:    #111111; /* Structural Panel Shelf */
+  --bg-elevated:   #1A1A1A; /* Surface-Alt / Card Body / Tile */
+  --bg-overlay:    #111111; /* Dropdown & Dialogs */
+  --bg-glass:      rgba(0, 0, 0, 0.95);
+  --bg-glass-card: rgba(17, 17, 17, 0.98);
+
+  /* Trading — Semantic Colors (Utilitarian) */
+  --bull:        #16A34A; /* Accent Green (Observed live-status dot & buy/bull) */
+  --bull-bright: #22C55E;
+  --bull-dim:    rgba(22, 163, 74, 0.12);
+  --bull-glow:   rgba(22, 163, 74, 0.20);
+  --bull-border: rgba(22, 163, 74, 0.35);
+
+  --bear:        #DC2626; /* Accent Red (Observed semantic accent & sell/bear) */
+  --bear-bright: #EF4444;
+  --bear-dim:    rgba(220, 38, 38, 0.12);
+  --bear-glow:   rgba(220, 38, 38, 0.20);
+  --bear-border: rgba(220, 38, 38, 0.35);
+
+  /* Accent & Utility — Single rationed blue (#2563EB) */
+  --accent:        #2563EB;
+  --accent-hover:  #3B82F6;
+  --accent-dim:    rgba(37, 99, 235, 0.12);
+  --accent-glow:   rgba(37, 99, 235, 0.22);
+  --accent-border: rgba(37, 99, 235, 0.40);
+
+  /* Primary Action CTA — Solid near-white full pill */
+  --primary:       #FFFFFF;
+  --primary-hover: #F3F4F6;
+  --primary-text:  #000000;
+
+  /* Gold & Warnings */
+  --gold:     #EAB308; /* Accent Amber (Observed star ratings & warnings) */
+  --gold-dim: rgba(234, 179, 8, 0.14);
+
+  /* Text — Inter-only high legibility */
+  --text-primary:   #FAFAFA;
+  --text-secondary: #9CA3AF;
+  --text-muted:     #6B7280;
+  --text-inverse:   #000000;
+
+  /* Borders — Hairline & refined */
+  --border:        rgba(255, 255, 255, 0.08);
+  --border-light:  rgba(255, 255, 255, 0.14);
+  --border-active: #2563EB;
+  --border-panel:  #262626;
+
+  /* Typography — Inter exclusively */
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Inter', -apple-system, BlinkMacSystemFont, monospace;
+
+  /* Geometry & Rounded Language */
+  --radius-xl:      24px;   /* Card Large (24px tile-quad / dialogs) */
+  --radius-lg:      16px;   /* Card (16px icon-body) */
+  --radius-card-lg: 24px;
+  --radius-card:    16px;
+  --radius-control:  8px;   /* Control (8px inputs / dropdown items) */
+  --radius-chip:     4px;   /* Chip (4px glass utility) */
+  --radius-pill:  9999px;   /* Pill (9999px primary & secondary CTAs) */
+  --radius:          8px;
+  --radius-sm:       8px;
+  --radius-xs:       4px;
+
+  /* Elevation Shadows */
+  --shadow-button: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-card:   0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -4px rgba(0, 0, 0, 0.2);
+  --shadow-xs:     0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-sm:     0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow:        0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+  --shadow-lg:     0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6);
+  --shadow-xl:     0 25px 50px -12px rgba(0, 0, 0, 0.7);
+
+  /* Snappy utilitarian transitions (0.15s / 0.2s cubic-bezier(0.4, 0, 0.2, 1)) */
+  --ease-snappy: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out:    cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.4, 0, 0.2, 1);
+}

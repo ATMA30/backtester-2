@@ -38,4 +38,8 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(), microphone=(), camera=()"
-    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://api.frankfurter.dev https://api.binance.com wss://ws.derivws.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    Cross-Origin-Opener-Policy = "same-origin"
+    # style-src: no 'unsafe-inline'. The one stylesheet injected at runtime is
+    # lightweight-charts' attribution logo, allowed by its exact hash; a library
+    # upgrade that changes it fails e2e/csp.prod.e2e.ts.
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'sha256-3pRED1tOXas1FXFoPb9TGCjmYe9XQsmO9OV23khV2nY=' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://api.frankfurter.dev https://api.binance.com wss://ws.derivws.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"

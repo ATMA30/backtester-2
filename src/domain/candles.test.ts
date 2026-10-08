@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  closesOnlyPrefixEnd,
   isClosesOnlySeries,
+  mergeWeekendDailyCandles,
   aggregateCandles,
   detectBaseTF,
   indexAtOrAfter,
@@ -208,5 +210,44 @@ describe('isClosesOnlySeries', () => {
   it('accepts a real series with a few doji-like bars', () => {
     const series = Array.from({ length: 50 }, (_, i) => candle(i, i % 10 !== 0));
     expect(isClosesOnlySeries(series)).toBe(false);
+  });
+});
+
+describe('mergeWeekendDailyCandles', () => {
+  const day = (iso: string, o: number, h: number, l: number, c: number, v = 10) => ({
+    time: Date.parse(`${iso}T00:00:00Z`) / 1000, open: o, high: h, low: l, close: c, volume: v,
+  });
+
+  it('folds the Sunday session into Monday', () => {
+    const merged = mergeWeekendDailyCandles([
+      day('2026-09-18', 1.0, 1.1, 0.9, 1.05), // Friday
+      day('2026-09-20', 1.06, 1.2, 1.04, 1.07, 2), // Sunday
+      day('2026-09-21', 1.07, 1.1, 0.95, 1.08), // Monday
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[1]).toMatchObject({
+      time: Date.parse('2026-09-21T00:00:00Z') / 1000,
+      open: 1.06, high: 1.2, low: 0.95, close: 1.08, volume: 12,
+    });
+  });
+
+  it('keeps a trailing weekend candle that has no weekday after it yet', () => {
+    const merged = mergeWeekendDailyCandles([day('2026-09-18', 1, 1.1, 0.9, 1.05), day('2026-09-20', 1.06, 1.07, 1.05, 1.06)]);
+    expect(merged).toHaveLength(2);
+  });
+});
+
+describe('closesOnlyPrefixEnd', () => {
+  const closeOnly = (t: number) => ({ time: t, open: 1, close: 1.01, high: 1.01, low: 1, volume: 0 });
+  const real = (t: number) => ({ time: t, open: 1, close: 1.01, high: 1.02, low: 0.99, volume: 10 });
+
+  it('finds where ECB closes give way to real candles', () => {
+    const series = [...Array.from({ length: 50 }, (_, i) => closeOnly(i)), ...Array.from({ length: 50 }, (_, i) => real(50 + i))];
+    expect(closesOnlyPrefixEnd(series)).toBe(50);
+  });
+
+  it('says nothing for an all-real or an all-closes series', () => {
+    expect(closesOnlyPrefixEnd(Array.from({ length: 100 }, (_, i) => real(i)))).toBeNull();
+    expect(closesOnlyPrefixEnd(Array.from({ length: 100 }, (_, i) => closeOnly(i)))).toBeNull();
   });
 });

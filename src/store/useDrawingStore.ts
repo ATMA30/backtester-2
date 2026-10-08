@@ -166,6 +166,7 @@ interface DrawingState {
   commitDrawingEdit: () => void;
   removeDrawing: (id: string) => void;
   clearDrawings: () => void;
+  clearAllSymbolsDrawings: () => void;
   selectDrawing: (id: string | null) => void;
   setCurrentStyle: (style: Partial<DrawingStyle>) => void;
   undo: () => void;
@@ -309,6 +310,28 @@ export const useDrawingStore = create<DrawingState>((set, get) => ({
       drawingsBySymbol: updatedMap,
       ...pushHistory(history, historyIndex, []),
       selectedDrawingId: null,
+    });
+  },
+
+  clearAllSymbolsDrawings: () => {
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    pendingSnapshot = null;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Best-effort
+    }
+
+    set({
+      drawingsBySymbol: {},
+      drawings: [],
+      history: [[]],
+      historyIndex: 0,
+      selectedDrawingId: null,
+      activeTool: 'cursor',
     });
   },
 

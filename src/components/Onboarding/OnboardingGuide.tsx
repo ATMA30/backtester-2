@@ -41,7 +41,7 @@ export const OnboardingGuide: React.FC = () => {
   const isReplayActive = useReplayStore((s) => s.isActive);
   const isPicking = useReplayStore((s) => s.isPicking);
   const hasTraded = useTradeStore(
-    (s) => s.activePosition !== null || s.pendingOrders.length > 0 || s.closedPositions.length > 0
+    (s) => s.openPositions.length > 0 || s.pendingOrders.length > 0 || s.closedPositions.length > 0
   );
   const hasClosed = useTradeStore((s) => s.closedPositions.length > 0);
   const activeModal = useUIStore((s) => s.activeModal);

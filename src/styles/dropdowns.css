@@ -1,0 +1,191 @@
+/* Menus déroulants partagés par la barre du haut et la barre de replay. */
+
+/* ══════════════════════════════════════════════════════════════════
+   DROPDOWN SYSTEM
+══════════════════════════════════════════════════════════════════ */
+.tv-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.tv-dropdown-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    background 0.13s var(--ease-snappy),
+    color 0.13s var(--ease-snappy),
+    border-color 0.13s var(--ease-snappy),
+    transform 0.1s var(--ease-spring);
+  white-space: nowrap;
+}
+
+.tv-dropdown-btn:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.tv-dropdown-btn:active { transform: scale(0.97); }
+
+/* `:where(svg)` : couleur par défaut des icônes, qu'un utilitaire `u-color-…`
+   posé sur l'icône doit pouvoir remplacer (spécificité 0,1,0 au lieu de 0,1,1). */
+.tv-dropdown-btn :where(svg) {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.2s var(--ease-out);
+}
+
+/* Dropdown menu */
+.tv-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  background: var(--bg-glass-card);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255,255,255,0.03) inset;
+  z-index: 1000;
+  min-width: 148px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 4px;
+  transform-origin: top left;
+}
+
+.tv-dropdown-menu.show {
+  display: block;
+  animation: dropdownReveal 0.18s var(--ease-out) both;
+}
+
+@keyframes dropdownReveal {
+  from { opacity: 0; transform: scale(0.94) translateY(-6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Dropdown item */
+.tv-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 400;
+  transition:
+    background 0.1s var(--ease-snappy),
+    color 0.1s var(--ease-snappy);
+  user-select: none;
+}
+
+.tv-dropdown-item:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
+
+.tv-dropdown-item.active {
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+
+.tv-dropdown-item.active:hover {
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.tv-dropdown-item.tv-dropdown-item-danger {
+  color: var(--bear);
+}
+
+.tv-dropdown-item.tv-dropdown-item-danger:hover {
+  background: var(--bear-dim);
+  color: var(--bear-bright);
+}
+
+.tv-dropdown-item.tv-dropdown-item-danger :where(svg) {
+  color: var(--bear);
+}
+
+.tv-dropdown-item.tv-dropdown-item-danger:hover :where(svg) {
+  color: var(--bear-bright);
+}
+
+/* Section header inside dropdown */
+.dropdown-section-label {
+  padding: 7px 10px 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  pointer-events: none;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
+  pointer-events: none;
+}
+
+/* Indicators active list */
+#active-indicators-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Raccourci aligné à droite dans les menus déroulants. */
+.tv-dropdown-item .shortcut-hint {
+  margin-left: auto;
+  font-family: var(--mono, 'JetBrains Mono', monospace);
+  font-size: 10px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ── Éléments de menu devenus des boutons ─────────────────────────
+   Ils étaient des `div` cliquables : ni focus clavier, ni Entrée, ni rôle pour
+   les lecteurs d'écran. Devenus des `<button>`, ils héritaient des styles du
+   navigateur (bordure, fond gris, police système, texte centré). Cette remise
+   à zéro a une spécificité nulle (`:where`) : elle efface les styles du
+   navigateur sans jamais l'emporter sur une règle de l'application. */
+:where(button.tv-dropdown-item, button.topbar-asset-selector, button.topbar-witness-badge, button#drop-zone, button#modal-drop) {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  text-align: inherit;
+}
+
+/* Un `div` de bloc occupait toute la largeur ; un bouton se contente de son contenu. */
+:where(button.tv-dropdown-item, button#drop-zone, button#modal-drop) {
+  display: block;
+  width: 100%;
+}
+
+:where(label.forex-session-row) {
+  cursor: pointer;
+}

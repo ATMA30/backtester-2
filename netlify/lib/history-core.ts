@@ -27,8 +27,9 @@
  */
 
 import { getHistoricalRates } from 'dukascopy-node';
-import { sanitizeCandles, RawCandleLike } from '../../src/domain/candles';
+import { mergeWeekendDailyCandles, sanitizeCandles, RawCandleLike } from '../../src/domain/candles';
 import { DUKASCOPY_DAILY_FROM, DUKASCOPY_SPAN_DAYS } from '../../src/domain/archive-limits';
+import { HISTORY_API_VERSION } from '../../src/domain/history-api';
 
 const UPSTREAM_TIMEOUT_MS = 4_000;
 /**
@@ -235,10 +236,17 @@ function corsHeaders(request: Request): Record<string, string> {
   return {};
 }
 
-function jsonResponse(body: unknown, status: number, request: Request, cacheable = false): Response {
+function jsonResponse(
+  body: unknown,
+  status: number,
+  request: Request,
+  cacheable = false,
+  extraHeaders: Record<string, string> = {}
+): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
+      ...extraHeaders,
       'Content-Type': 'application/json; charset=utf-8',
       'X-Content-Type-Options': 'nosniff',
       // Historical bars barely change; the CDN absorbs repeat traffic that
@@ -329,10 +337,24 @@ function isoDaysBefore(end: Date, days: number): string {
  * server only, so the depth the UI promised (five hourly years) existed on the
  * developer's machine and nowhere else. Bounded by `DUKASCOPY_BUDGET_MS`.
  */
-async function fetchDukascopy(query: HistoryQuery, fetcher: DukascopyFetcher): Promise<RawCandleLike[]> {
+/**
+ * What happened to the Dukascopy attempt — logged and exposed per request, so
+ * that a rise of `throttled` or `budget` (the function's shared IPs being
+ * rate-limited) shows in the logs before users notice shallower history.
+ */
+export type DukascopyOutcome = 'ok' | 'empty' | 'budget' | 'throttled' | 'error' | 'unsupported' | 'disabled';
+
+async function fetchDukascopy(
+  query: HistoryQuery,
+  fetcher: DukascopyFetcher,
+  report: (outcome: DukascopyOutcome) => void
+): Promise<RawCandleLike[]> {
   const instrument = dukascopyInstrument(query.symbol);
   const timeframe = DUKASCOPY_TIMEFRAME[query.interval];
-  if (!instrument || !timeframe) return [];
+  if (!instrument || !timeframe) {
+    report('unsupported');
+    return [];
+  }
 
   const end = query.to !== null ? new Date(query.to * 1000) : new Date();
   const span = DUKASCOPY_SPAN_DAYS[query.interval];
@@ -357,10 +379,14 @@ async function fetchDukascopy(query: HistoryQuery, fetcher: DukascopyFetcher): P
       budget,
     ]);
     if (rates === null) {
-      console.warn('[history] dukascopy over budget', { instrument, timeframe });
+      report('budget');
       return [];
     }
-    if (!Array.isArray(rates)) return [];
+    if (!Array.isArray(rates) || rates.length === 0) {
+      report('empty');
+      return [];
+    }
+    report('ok');
     return rates.map((r: Record<string, unknown>) => ({
       time: r.timestamp,
       open: r.open,
@@ -371,7 +397,7 @@ async function fetchDukascopy(query: HistoryQuery, fetcher: DukascopyFetcher): P
     }));
   } catch (error) {
     // 429 in particular: every visitor shares the function's IP addresses.
-    console.warn('[history] dukascopy failed', { instrument, timeframe, error: String(error) });
+    report(/\b429\b/.test(String(error)) ? 'throttled' : 'error');
     return [];
   } finally {
     clearTimeout(timer);
@@ -417,12 +443,16 @@ export async function handleHistoryRequest(request: Request, options: HistoryOpt
   const nowSeconds = Math.floor(Date.now() / 1000);
 
   const validTo = to === null || (/^\d{9,10}$/.test(toRaw ?? '') && to! > 315_532_800 && to! <= nowSeconds + 86_400);
-  if (!SYMBOL_PATTERN.test(symbol) || !VALID_INTERVALS.has(interval) || !VALID_RANGES.has(range) || !validTo) {
+  // `v` is part of the CDN cache key: any value but the current one is a way
+  // around the cache (see `domain/history-api`).
+  const version = url.searchParams.get('v');
+  const validVersion = version === null || version === HISTORY_API_VERSION;
+  if (!SYMBOL_PATTERN.test(symbol) || !VALID_INTERVALS.has(interval) || !VALID_RANGES.has(range) || !validTo || !validVersion) {
     return jsonResponse(
       {
         error: 'invalid_parameters',
         detail:
-          'symbol must match [A-Z0-9]{2,12}; interval and range must be supported values; to must be epoch seconds after 1980.',
+          'symbol must match [A-Z0-9]{2,12}; interval and range must be supported values; to must be epoch seconds after 1980; v must be the current API version.',
       },
       400,
       request
@@ -449,8 +479,18 @@ export async function handleHistoryRequest(request: Request, options: HistoryOpt
   // extends a real series further back in time (see below).
   const isForexLike = symbol.length === 6 && !symbol.endsWith('USDT');
   const dailyForex = DAILY_INTERVALS.has(interval) && isForexLike;
+  const startedAt = Date.now();
+  let dukascopyOutcome: DukascopyOutcome = 'disabled';
+  let dukascopyMs = 0;
   const dukascopy = options.dukascopy === undefined ? realDukascopy : options.dukascopy;
-  if (dukascopy) await attempt('dukascopy', () => fetchDukascopy(query, dukascopy));
+  if (dukascopy) {
+    await attempt('dukascopy', () =>
+      fetchDukascopy(query, dukascopy, (outcome) => {
+        dukascopyOutcome = outcome;
+        dukascopyMs = Date.now() - startedAt;
+      })
+    );
+  }
   await attempt('yahoo', () => fetchYahoo(symbol, range, interval, to));
   if (symbol.endsWith('USDT')) await attempt('binance', () => fetchBinance(symbol, interval, to));
 
@@ -465,12 +505,27 @@ export async function handleHistoryRequest(request: Request, options: HistoryOpt
 
   // Shared with the client instead of a third private copy: the two previous
   // implementations had already diverged on NaN handling.
-  const candles = sanitizeCandles(rows);
+  const sanitized = sanitizeCandles(rows);
+  // Markets closed at the weekend: Dukascopy's short Sunday session becomes
+  // part of Monday, as on TradingView. Crypto trades seven days a week.
+  const candles = interval === '1d' && !symbol.endsWith('USDT') ? mergeWeekendDailyCandles(sanitized) : sanitized;
+
+  // One structured line per request: filter the function logs on `[history]`
+  // and count `source` / `dukascopy` to see how often the fallback serves.
+  const totalMs = Date.now() - startedAt;
+  console.info(
+    '[history]',
+    JSON.stringify({ symbol, interval, source, dukascopy: dukascopyOutcome, ms: totalMs, count: candles.length })
+  );
+  const observability = {
+    'X-History-Source': source ?? 'none',
+    'Server-Timing': `dukascopy;dur=${dukascopyMs};desc="${dukascopyOutcome}", total;dur=${totalMs}`,
+  };
 
   if (candles.length === 0) {
     // 502 rather than an empty 200: the client can no longer mistake "every
     // upstream is down" for "this instrument has no history".
-    return jsonResponse({ error: 'upstream_unavailable', symbol, interval, range }, 502, request);
+    return jsonResponse({ error: 'upstream_unavailable', symbol, interval, range }, 502, request, false, observability);
   }
 
   return jsonResponse(
@@ -479,6 +534,7 @@ export async function handleHistoryRequest(request: Request, options: HistoryOpt
     { symbol, interval, range, source, extendedWith: extendedWithEcb ? 'ecb' : null, count: candles.length, candles },
     200,
     request,
-    true
+    true,
+    observability
   );
 }

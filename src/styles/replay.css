@@ -1,0 +1,1255 @@
+/* Barre de replay : lecture, compte, saisie d’ordre, exécution, positions, frais. */
+
+/* ══════════════════════════════════════════════════════════════════
+   REPLAY HINT OVERLAY (Top Floating Glass Banner)
+══════════════════════════════════════════════════════════════════ */
+#replay-hint {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.90);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  padding: 8px 18px;
+  border-radius: 9999px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 20px rgba(59, 130, 246, 0.15);
+  z-index: 1001;
+  pointer-events: none;
+  animation: hintReveal 0.22s var(--ease-out) both;
+}
+
+@keyframes hintReveal {
+  from { opacity: 0; transform: translate(-50%, -10px) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.rh-icon-wrap {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: #60A5FA;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  animation: pulseIcon 2s infinite ease-in-out;
+}
+
+@keyframes pulseIcon {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 rgba(59, 130, 246, 0); }
+  50% { transform: scale(1.06); box-shadow: 0 0 10px rgba(59, 130, 246, 0.4); }
+}
+
+.rh-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rh-text {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #F8FAFC;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.rh-sub {
+  font-size: 11px;
+  color: #94A3B8;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.rh-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748B;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   FLOATING REPLAY BAR & ACTION CENTER
+══════════════════════════════════════════════════════════════════ */
+#replay-bar {
+  display: none;
+  /* `fixed`, pas `absolute` : ancrée au bas de la fenêtre, elle ne dépend plus
+     de la hauteur du document ni d'un éventuel défilement. */
+  position: fixed;
+  /* Ancrée au-dessus de la barre d'état : à `bottom: 14px` elle recouvrait la
+     ligne source / nombre de bougies / plage de dates, qui fait exactement
+     --statusbar-h de haut. */
+  bottom: calc(var(--statusbar-h) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(32px) saturate(220%);
+  -webkit-backdrop-filter: blur(32px) saturate(220%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  padding: 6px 14px;
+  gap: 12px;
+  align-items: center;
+  z-index: 80;
+  box-shadow:
+    0 12px 36px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  /* Largeur *définie*, pas un simple plafond. Avec `max-width` + `overflow-x`,
+     le contenu prenait sa largeur `max-content` : sous ~1150 px la barre cessait
+     de passer à la ligne et débordait de 200 px, Acheter / Vendre hors écran.
+     Une largeur définie donne aux enfants une référence contre laquelle
+     rétrécir, et l'enroulement devient identique à toutes les tailles. */
+  width: min(calc(100vw - 32px), 1600px);
+  /* Elle ne peut plus dépasser la place entre l'en-tête et la barre d'état :
+     au pire elle défile en interne, jamais elle n'est rognée par la fenêtre. */
+  max-height: calc(100vh - 48px - var(--statusbar-h) - 24px);
+  user-select: none;
+  animation: replayBarSlideUp 0.25s var(--ease-spring) both;
+  /* Filet de sécurité conservé : si le contenu incompressible dépasse malgré
+     tout, la barre défile plutôt que de rogner un bouton d'exécution. */
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+#replay-bar::-webkit-scrollbar { height: 4px; }
+#replay-bar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 2px;
+}
+
+@keyframes replayBarSlideUp {
+  from { opacity: 0; transform: translate(-50%, 16px) scale(0.98); }
+  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+/* ── BLOCK 1: REPLAY & TIMELINE (LEFT) ── */
+.rp-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 1. Bouton Quitter discret */
+.rp-exit-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #94A3B8;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.rp-exit-btn:hover {
+  background: rgba(244, 63, 94, 0.12);
+  color: #FB7185;
+  border-color: rgba(244, 63, 94, 0.3);
+}
+
+.rp-strategy-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #94A3B8;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.rp-strategy-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #F8FAFC;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.rp-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#rp-step-back,
+#rp-step-fwd {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #94A3B8;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+
+#rp-step-back:hover,
+#rp-step-fwd:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #F8FAFC;
+  transform: scale(1.06);
+}
+
+#rp-play {
+  background: linear-gradient(135deg, #3B82F6, #2563EB);
+  border: none;
+  color: white;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.4);
+  transition: all 0.14s ease;
+  flex-shrink: 0;
+}
+
+#rp-play:hover {
+  transform: scale(1.08);
+  background: linear-gradient(135deg, #60A5FA, #3B82F6);
+}
+
+#rp-play.playing {
+  background: linear-gradient(135deg, #F59E0B, #D97706);
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.4);
+}
+
+/* 1. Date compacte badge (Intraday) */
+.rp-date-badge {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #60A5FA;
+  white-space: nowrap;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
+/* 1. Sélecteur de vitesse compact (Dropdown 1× ▾) */
+.rp-speed-btn-compact {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #E2E8F0;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.12s ease;
+}
+
+.rp-speed-btn-compact:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #FFFFFF;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.replay-bar-separator {
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+/* ── BLOCK 2: INDICATEURS DE COMPTE & STATS (AU CENTRE) ── */
+.rp-metrics-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.rp-stat-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rp-stat-label {
+  font-size: 8px;
+  color: #64748B;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.rp-stat-val {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #F8FAFC;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 2. P&L Ouvert passif sans cadre d'input désactivé */
+.rp-pnl-passive {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rp-pnl-passive.idle {
+  color: #64748B;
+  font-weight: 500;
+}
+
+.rp-pnl-passive.profit {
+  color: #10B981;
+}
+
+.rp-pnl-passive.loss {
+  color: #F43F5E;
+}
+
+/* Un second bloc `#rr-badge` existait ici. Deux déclarations du même
+   identifiant se mélangent propriété par propriété selon l'ordre du fichier :
+   celle-ci fournissait la couleur et le fond, celle plus bas le `display` et la
+   bordure. Une seule source (voir « REPLAY BAR », plus bas). */
+
+.rp-pending-orders-btn {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38BDF8;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+}
+
+.rp-pending-orders-btn:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.55);
+}
+
+/* ── Positions ouvertes (plusieurs à la fois) ── */
+.rp-positions {
+  position: relative;
+}
+
+.rp-positions-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rp-positions-btn:hover,
+.rp-positions-btn[aria-expanded='true'] {
+  background: var(--accent-glow);
+}
+
+.rp-positions-menu {
+  top: auto;
+  bottom: calc(100% + 8px);
+  /* Ouvert vers la gauche : à droite, il n'y a que le bord de la barre. */
+  left: auto;
+  right: 0;
+  display: block;
+  min-width: 320px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.rp-position-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rp-position-row:last-child {
+  margin-bottom: 0;
+}
+
+.rp-position-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rp-position-side {
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rp-position-side.long {
+  color: var(--bull-bright);
+}
+
+.rp-position-side.short {
+  color: var(--bear-bright);
+}
+
+.rp-position-levels {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--text-secondary);
+}
+
+.rp-position-pnl {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.rp-position-pnl.profit {
+  color: var(--bull-bright);
+}
+
+.rp-position-pnl.loss {
+  color: var(--bear-bright);
+}
+
+.rp-position-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.rp-position-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.rp-position-actions button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.rp-position-actions button.danger {
+  border-color: var(--bear-border);
+  background: var(--bear-dim);
+  color: var(--bear-bright);
+}
+
+/* ── BLOCK 3: SAISIE D'ORDRES STRUCTURÉE ── */
+.rp-order-grid {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  /* `min-width: 0` est indispensable : sans lui la ligne d'aide impose sa
+     largeur intrinsèque au conteneur et pousse Acheter / Vendre hors écran. */
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: visible;
+}
+
+.rp-order-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Les règles de saisie, sorties des attributs `title` : une infobulle est
+   invisible au tactile et lente à la souris, or ces règles décident du stop. */
+.rp-order-hints {
+  display: flex;
+  /* `align-items: flex-start` du parent donne à cet enfant sa largeur
+     `max-content` : il rendait 714 px dans un conteneur de 462 px et débordait
+     de la barre, texte coupé au bord de l'écran. `align-self: stretch` le
+     ramène à la largeur du parent — c'est seulement là que son `overflow`
+     sert à quelque chose. */
+  align-self: stretch;
+  /* Les aides passent à la ligne plutôt que de se tronquer : trois fragments
+     coupés par une ellipse n'aident personne. La hauteur de la barre est
+     mesurée, la mise en page suit. */
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-muted);
+  padding-left: 2px;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* L'aide se tronque plutôt que d'élargir la barre ; la syntaxe reste dans les
+   placeholders, qui eux ne se tronquent pas. */
+.rp-order-hints > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-order-hints strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.rp-order-hints .derived {
+  color: #60A5FA;
+}
+
+/* L'aide n'est masquée qu'aux largeurs où elle ne tiendrait plus ; les
+   placeholders portent alors seuls la syntaxe. */
+@media (max-width: 1180px) {
+  .rp-order-hints { display: none; }
+}
+
+.rp-input-subgroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.rp-sl-tp-subgroup {
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+
+.rp-sync-icon {
+  color: #60A5FA;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 10px;
+  opacity: 0.75;
+}
+
+.rp-input-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Aucun champ ne se laisse comprimer : seule l'aide se tronque. */
+  flex-shrink: 0;
+}
+
+.rp-input-label {
+  font-size: 9.5px;
+  color: #7C879B;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.rp-input-label.sl {
+  color: #FB7185;
+}
+
+.rp-input-label.tp {
+  color: #34D399;
+}
+
+.rp-input-box input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: #F8FAFC;
+  border-radius: 4px;
+  padding: 0 6px;
+  height: 26px;
+  width: 60px;
+  font-family: var(--mono);
+  font-size: 11px;
+  outline: none;
+  transition: border-color 0.12s, background 0.12s;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
+/* Les champs de prix portent la syntaxe acceptée dans leur placeholder
+   (« prix, 30p ou 1,5 % ») : tronquée, elle ne sert à rien. */
+#trade-entry,
+#trade-sl,
+#trade-tp {
+  width: 96px;
+  flex-shrink: 0;
+}
+
+#trade-risk-pct,
+#trade-qty {
+  width: 56px;
+}
+
+.rp-input-box input::placeholder {
+  color: #6B7689;
+  opacity: 1;
+}
+
+.rp-input-box input:focus {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3);
+}
+
+.rp-input-box input::placeholder {
+  color: #475569;
+  font-size: 10px;
+}
+
+/* ── BLOCK 4: ACTIONS D'EXÉCUTION & GESTION (À DROITE) ── */
+.rp-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: 2px;
+  /* Acheter et Vendre ne quittent jamais l'écran. */
+  flex-shrink: 0;
+}
+
+.trade-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: all 0.12s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.trade-btn.buy {
+  background: #10B981;
+  color: #FFFFFF;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.trade-btn.buy:hover {
+  background: #059669;
+  box-shadow: 0 3px 12px rgba(16, 185, 129, 0.45);
+}
+
+.trade-btn.sell {
+  background: #E11D48;
+  color: #FFFFFF;
+  box-shadow: 0 2px 8px rgba(225, 29, 72, 0.3);
+}
+
+.trade-btn.sell:hover {
+  background: #BE123C;
+  box-shadow: 0 3px 12px rgba(225, 29, 72, 0.45);
+}
+
+.trade-btn.be,
+.trade-btn.scale {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #CBD5E1;
+  font-weight: 600;
+  padding: 0 8px;
+}
+
+.trade-btn.be:hover:not(.disabled),
+.trade-btn.scale:hover:not(.disabled) {
+  background: rgba(255, 255, 255, 0.10);
+  color: #FFFFFF;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.trade-btn.disabled {
+  opacity: 0.25;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.trade-btn.close {
+  background: rgba(244, 63, 94, 0.15);
+  color: #FB7185;
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  padding: 0 8px;
+}
+
+.trade-btn.close:hover {
+  background: #E11D48;
+  color: white;
+}
+
+.trade-btn.journal-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #94A3B8;
+  width: 26px;
+  padding: 0;
+}
+
+.trade-btn.journal-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #F8FAFC;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   RESPONSIVE
+══════════════════════════════════════════════════════════════════ */
+@media (max-width: 1000px) {
+  .rp-trade-panel { display: none; }
+}
+
+@media (max-width: 900px) {
+  #draw-toolbar { display: none; }
+  .rp-speed-group { display: none; }
+}
+
+@media (max-width: 700px) {
+  .logo-text { display: none; }
+  .logo { margin-right: 4px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   R:R BADGE
+══════════════════════════════════════════════════════════════════ */
+#rr-badge {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  font-family: var(--mono);
+  font-size: 10px; font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+#rr-badge.visible { display: flex; }
+#rr-badge.good { color: var(--bull); border-color: var(--bull-border); background: var(--bull-dim); }
+#rr-badge.bad  { color: var(--bear); border-color: var(--bear-border); background: var(--bear-dim); }
+
+/* Trade bar additions: BE & Scale */
+.trade-btn.be {
+  background: rgba(96, 165, 250, 0.15);
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  color: #60A5FA;
+  font-weight: 700;
+  min-width: 32px;
+  padding: 0 8px;
+}
+.trade-btn.be:hover {
+  background: #60A5FA;
+  color: #060810;
+}
+
+.trade-btn.scale {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #F59E0B;
+  font-weight: 700;
+  min-width: 28px;
+  padding: 0 6px;
+}
+.trade-btn.scale:hover {
+  background: #F59E0B;
+  color: #060810;
+}
+
+/* Tant qu'un menu de la barre de replay est ouvert, la barre cesse de rogner.
+
+   `#replay-bar` porte `overflow: auto` comme filet de sécurité sur les fenêtres
+   courtes. Or un conteneur dont l'`overflow` n'est pas `visible` rogne TOUS ses
+   descendants positionnés en absolu, y compris hors de sa boîte : les trois
+   menus (point de départ, vitesse, ordres en attente) s'ouvrent vers le haut et
+   se faisaient couper au ras de la barre — on n'en voyait que la dernière ligne.
+
+   `position: fixed` sur les menus ne sauverait rien : `#replay-bar` porte un
+   `transform`, ce qui en fait le bloc conteneur de ses descendants fixes, qui
+   restent donc rognés. Les deux besoins étant exclusifs, on choisit selon le
+   moment — personne ne fait défiler la barre pendant qu'il lit un menu. */
+#replay-bar.has-open-menu {
+  overflow: visible;
+}
+
+/* Risque réel au-dessus du risque demandé (volume arrondi au lot minimum). */
+.rp-order-hints .derived.is-warning {
+  color: var(--gold);
+}
+
+/* Date de départ : un vrai champ date, borné aux données chargées, à la place
+   du `prompt()` natif. */
+.rp-date-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.rp-date-form input[type='date'] {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color-scheme: dark;
+}
+
+.rp-date-form .btn-sm {
+  flex-shrink: 0;
+}
+
+/* ── Frais de trading (barre de replay) ─────────────────────────
+   Toujours visibles à côté du solde : tout résultat en dépend. */
+.rp-costs-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.rp-costs-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+/* Résultats hors frais : un état à ne pas manquer. */
+.rp-costs-btn.is-off {
+  color: var(--gold);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.rp-account {
+  position: relative;
+}
+
+.rp-account-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.rp-account-btn .rp-stat-val {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.rp-account-btn:hover .rp-stat-val,
+.rp-account-btn[aria-expanded='true'] .rp-stat-val {
+  color: var(--accent-hover);
+}
+
+.tv-dropdown-menu.rp-account-menu {
+  bottom: calc(100% + 8px);
+  top: auto;
+  display: block;
+  width: 250px;
+  padding: 6px;
+}
+
+.rp-account-currency {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.rp-account-code {
+  font-family: var(--mono);
+  font-weight: 700;
+  width: 32px;
+}
+
+.rp-account-hint,
+.rp-account-confirm p {
+  margin: 6px 4px 2px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.rp-account-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tv-dropdown-menu.rp-costs-menu {
+  bottom: calc(100% + 8px);
+  top: auto;
+  display: block;
+  width: 280px;
+  padding: 6px 10px 10px;
+}
+
+.rp-costs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.rp-costs-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rp-costs-fields.is-disabled {
+  opacity: 0.45;
+}
+
+.rp-costs-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.rp-costs-fields input {
+  height: 26px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+
+.rp-costs-note {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   BARRE DE REPLAY : GRILLE À DEUX RANGÉES
+
+   Quatre blocs posés en `flex` qui passaient à la ligne selon la largeur : le
+   solde flottait entre deux champs, Acheter / Vendre tombaient à mi-hauteur,
+   et la même barre avait une forme différente à chaque taille d'écran. Une
+   grille nomme les places une fois pour toutes :
+
+     lecture ........................ compte
+     ticket d'ordre ................. exécution
+
+   Sous 900 px, les quatre blocs s'empilent dans le même ordre. La hauteur
+   réelle reste publiée au graphique (`--replay-bar-h`).
+══════════════════════════════════════════════════════════════════ */
+#replay-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'transport account'
+    'ticket actions';
+  column-gap: 20px;
+  row-gap: 8px;
+  align-items: center;
+  width: min(calc(100vw - 32px), 1180px);
+  padding: 8px 14px 9px;
+}
+
+#replay-bar > .replay-bar-separator {
+  display: none;
+}
+
+#replay-bar > .rp-left {
+  grid-area: transport;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+#replay-bar > .rp-metrics-group {
+  grid-area: account;
+  justify-self: end;
+  gap: 14px;
+}
+
+#replay-bar > .rp-order-grid {
+  grid-area: ticket;
+  align-self: start;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+#replay-bar > .rp-actions {
+  grid-area: actions;
+  justify-self: end;
+  align-self: start;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  /* Le filet de la rangée 2 court sous les deux blocs : même largeur visuelle. */
+  margin-top: 0;
+}
+
+/* Les boutons d'exécution sont la raison d'être de la rangée : plus hauts
+   que les champs d'aide, alignés sur les champs de saisie. */
+#replay-bar .rp-actions .trade-btn.buy,
+#replay-bar .rp-actions .trade-btn.sell {
+  height: 30px;
+  min-width: 96px;
+  justify-content: center;
+}
+
+@media (max-width: 900px) {
+  #replay-bar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'transport'
+      'account'
+      'ticket'
+      'actions';
+  }
+
+  #replay-bar > .rp-metrics-group,
+  #replay-bar > .rp-actions {
+    justify-self: start;
+  }
+}
+
+/* ── Frais : classes nommées (ex-utilitaires) ── */
+.rp-costs {
+  position: relative;
+}
+
+/* ── Barre de replay : classes nommées (ex-utilitaires) ── */
+.rp-icon-label-tight {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+.rp-anchor {
+  position: relative;
+}
+.rp-icon-label {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+}
+.rp-anchor-icon {
+  color: #38BDF8;
+}
+.rp-anchor-menu {
+  bottom: calc(100% + 8px);
+  display: block;
+  min-width: 220px;
+  top: auto;
+}
+.rp-menu-option {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.rp-anchor-icon-random {
+  color: #A78BFA;
+}
+.rp-anchor-icon-london {
+  color: #60A5FA;
+}
+.rp-anchor-icon-newyork {
+  color: #34D399;
+}
+.rp-anchor-icon-tokyo {
+  color: #FB923C;
+}
+.rp-anchor-icon-date {
+  color: #FCD34D;
+}
+.rp-date-icon {
+  color: var(--text-muted);
+}
+.rp-speed {
+  position: relative;
+}
+.rp-speed-menu {
+  bottom: calc(100% + 8px);
+  display: block;
+  min-width: 95px;
+  top: auto;
+}
+.rp-speed-option {
+  justify-content: space-between;
+}
+.rp-speed-option-hint {
+  color: #64748B;
+  font-size: 9px;
+}
+.rp-pending {
+  position: relative;
+}
+.rp-pending-icon {
+  color: #38BDF8;
+}
+.rp-pending-menu {
+  backdrop-filter: blur(20px);
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  bottom: calc(100% + 8px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  display: block;
+  min-width: 230px;
+  padding: 6px;
+  top: auto;
+}
+.rp-pending-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding: 2px 4px;
+}
+.rp-pending-title {
+  color: #94A3B8;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.rp-pending-cancel-all {
+  align-items: center;
+  background: rgba(244, 63, 94, 0.15);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  border-radius: 3px;
+  color: #FB7185;
+  cursor: pointer;
+  display: flex;
+  font-size: 9.5px;
+  font-weight: 600;
+  gap: 4px;
+  padding: 2px 6px;
+}
+.rp-pending-row {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  padding: 5px 8px;
+}
+.rp-pending-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rp-pending-levels {
+  color: #64748B;
+  font-family: var(--mono);
+  font-size: 9px;
+}
+.rp-pending-cancel {
+  align-items: center;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  border-radius: 4px;
+  color: #FB7185;
+  cursor: pointer;
+  display: flex;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+}
+.rp-journal-btn {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}

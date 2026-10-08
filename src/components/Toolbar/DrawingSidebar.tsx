@@ -241,8 +241,8 @@ export const DrawingSidebar: React.FC = () => {
       onMouseEnter={handleMouseEnter}
     >
       {/* Sleek Drag Grip Handle */}
-      <div className="draw-drag-handle u-display-flex u-align-items-center u-justify-content-center" title="Glisser pour déplacer">
-        <GripVertical size={13} strokeWidth={2} className="u-color-text-muted u-opacity-0_6" />
+      <div className="draw-drag-handle draw-grip" title="Glisser pour déplacer">
+        <GripVertical size={13} strokeWidth={2} className="draw-grip-icon" />
       </div>
 
       {/* Selection */}

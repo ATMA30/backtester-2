@@ -1,4 +1,16 @@
 export type PositionType = 'LONG' | 'SHORT';
+
+/** How the trader felt taking the trade — the journal's reason to exist. */
+export const EMOTIONS = ['calme', 'confiant', 'hésitant', 'impatient', 'frustré', 'euphorique', 'craintif'] as const;
+export type Emotion = (typeof EMOTIONS)[number];
+
+/** What the trader writes about a trade, open or closed. */
+export interface TradeAnnotation {
+  /** Name of the setup traded ("cassure", "retour sur zone"…), free text. */
+  setup?: string;
+  emotion?: Emotion;
+  note?: string;
+}
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP';
 
 /**
@@ -48,6 +60,12 @@ export interface Position {
   pnlPercent?: number;
   status: 'OPEN' | 'CLOSED' | 'CANCELLED';
   closeReason?: 'TP' | 'SL' | 'MANUAL';
+  annotation?: TradeAnnotation;
+  /**
+   * The chart was captured when the trade closed; the image lives in IndexedDB
+   * under this position's id (`services/db`, table `captures`).
+   */
+  hasScreenshot?: boolean;
 }
 
 export interface PendingOrder {

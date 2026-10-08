@@ -1,0 +1,218 @@
+/* Zone du graphique : conteneur, info-bulle du réticule, chargement, retour au présent. */
+
+/* ══════════════════════════════════════════════════════════════════
+   CHART AREA
+══════════════════════════════════════════════════════════════════ */
+#chart-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#chart-container {
+  flex: 1;
+  position: relative;
+  background: var(--bg-base);
+  overflow: hidden;
+}
+
+#tv-chart {
+  width: 100%;
+  height: 100%;
+  transition: height 0.38s var(--ease-out);
+}
+
+body.replay-active #tv-chart {
+  /* Hauteur réelle de la barre, publiée par ReplayBar, plus son décollement du
+     bas. Le 70px en dur ne suivait plus la barre dès que la ligne d'aide des
+     ordres passait à la ligne. */
+  height: calc(100% - var(--replay-bar-h, 70px) - 16px);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CROSSHAIR TOOLTIP
+══════════════════════════════════════════════════════════════════ */
+#crosshair-tooltip {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  background: rgba(9, 11, 18, 0.96);
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  font-family: var(--mono);
+  font-size: 11px;
+  box-shadow:
+    0 8px 32px rgba(0,0,0,0.6),
+    0 0 0 1px rgba(255,255,255,0.03) inset;
+  display: none;
+  min-width: 152px;
+  /* Subtle left accent line for visual anchoring */
+  border-left: 2px solid rgba(59,130,246,0.5);
+}
+
+.tt-date {
+  color: var(--text-muted);
+  font-size: 9px;
+  margin-bottom: 9px;
+  font-family: var(--font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding-bottom: 7px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.tt-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 3px;
+  line-height: 1;
+}
+
+.tt-label {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tt-val {
+  color: var(--text-primary);
+  font-weight: 500;
+  font-feature-settings: 'tnum';
+  font-size: 11.5px;
+}
+
+/* Séparateur avant la ligne de changement */
+.tt-row:last-child {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  margin-bottom: 0;
+}
+
+.tt-change.up   { color: var(--bull); }
+.tt-change.down { color: var(--bear); }
+
+/* ══════════════════════════════════════════════════════════════════
+   LOADING SPINNER
+══════════════════════════════════════════════════════════════════ */
+#loading {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 16, 0.75);
+  backdrop-filter: blur(4px);
+}
+
+#loading.show { display: flex; }
+
+.spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--border-light);
+  border-top-color: var(--accent);
+  animation: spin 0.65s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Retour au présent (replay) ──────────────────────────────────
+   Affiché dès que l'utilisateur regarde l'historique pendant la lecture :
+   la vue ne le ramène plus de force au bord droit, ce bouton le fait sur
+   demande. Au-dessus de l'axe du temps, à gauche de l'échelle des prix. */
+.chart-follow-btn {
+  position: absolute;
+  right: 76px;
+  /* Au-dessus de la barre de replay flottante, dont la hauteur varie. */
+  bottom: calc(var(--replay-bar-h, 96px) + 44px);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #FFFFFF;
+  background: var(--accent);
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  animation: overlayReveal 0.18s var(--ease-out) both;
+}
+
+.chart-follow-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* ── Graphique : classes nommées (ex-utilitaires) ── */
+.chart-hover-layer {
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 40;
+}
+.chart-hover-start {
+  align-items: center;
+  color: #38BDF8;
+  display: inline-flex;
+  gap: 5px;
+}
+.chart-hover-time {
+  color: #38BDF8;
+  font-family: var(--mono);
+}
+.chart-hover-price {
+  color: #94A3B8;
+  font-size: 10px;
+}
+.chart-hint-icon {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+.chart-loading-layout {
+  display: flex;
+}
+.welcome-logo-center {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+.welcome-logo-glyph {
+  color: #38BDF8;
+}
+.welcome-drop-icon-center {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+.welcome-drop-glyph {
+  color: #38BDF8;
+}
+.status-replay {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+.status-replay-icon-layout {
+  align-items: center;
+  display: inline-flex;
+}

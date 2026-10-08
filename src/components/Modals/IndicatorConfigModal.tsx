@@ -92,19 +92,19 @@ export const IndicatorConfigModal: React.FC = () => {
   };
 
   return (
-    <div id="indicator-modal" className="open u-display-flex u-opacity-1" onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}>
-      <div className="ind-modal-box u-width-380px" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Réglages de l’indicateur">
+    <div id="indicator-modal" className="open modal-overlay-open" onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}>
+      <div className="ind-modal-box ind-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Réglages de l’indicateur">
         <div className="ind-modal-header">
-          <div className="u-display-flex u-align-items-center u-gap-8px">
-            <SlidersHorizontal size={16} strokeWidth={2} className="u-color-3b82f6" />
-            <div className="u-display-flex u-flex-direction-column">
+          <div className="modal-title-row">
+            <SlidersHorizontal size={16} strokeWidth={2} className="ind-title-icon" />
+            <div className="ind-title-stack">
               <div className="ind-modal-title" id="ind-modal-title">Ajouter {selectedIndicatorType}</div>
               <div style={{ fontSize: '11px', color: isOscillator ? '#A78BFA' : '#3B82F6', fontWeight: 600, marginTop: '2px', letterSpacing: '0.4px' }}>
                 {isOscillator ? 'Oscillateur' : 'Indicateur de Tendance'}
               </div>
             </div>
           </div>
-          <button className="ind-modal-close u-display-flex u-align-items-center u-justify-content-center" onClick={handleClose}>
+          <button className="ind-modal-close modal-close-btn" onClick={handleClose}>
             <X size={15} strokeWidth={2.4} />
           </button>
         </div>
@@ -133,9 +133,11 @@ export const IndicatorConfigModal: React.FC = () => {
           <label>Couleur du tracé</label>
           <div className="ind-color-swatches" id="ind-color-swatches">
             {colorSwatches.map((c) => (
-              <div
+              <button type="button"
                 key={c}
-                className={`ind-color-swatch ${selectedColor === c ? 'active' : ''}`}
+                className={`ind-color-swatch color-swatch ${selectedColor === c ? 'active' : ''}`}
+                aria-label={`Couleur ${c}`}
+                aria-pressed={selectedColor === c}
                 style={{ background: c, width: 22, height: 22, borderRadius: 4, cursor: 'pointer', border: selectedColor === c ? '2px solid white' : '1px solid rgba(255,255,255,0.2)' }}
                 onClick={() => setCustomColor(c)}
               />

@@ -27,8 +27,7 @@ export type OrderRejection =
   | 'NON_POSITIVE_PRICE'
   | 'NON_POSITIVE_SIZE'
   | 'SL_WRONG_SIDE'
-  | 'TP_WRONG_SIDE'
-  | 'POSITION_ALREADY_OPEN';
+  | 'TP_WRONG_SIDE';
 
 export const REJECTION_MESSAGES: Record<OrderRejection, string> = {
   NON_FINITE_PRICE: 'Prix invalide : la valeur saisie n’est pas un nombre exploitable.',
@@ -38,7 +37,6 @@ export const REJECTION_MESSAGES: Record<OrderRejection, string> = {
     'Stop loss du mauvais côté : il doit être sous le prix d’entrée pour un achat, au-dessus pour une vente.',
   TP_WRONG_SIDE:
     'Take profit du mauvais côté : il doit être au-dessus du prix d’entrée pour un achat, en dessous pour une vente.',
-  POSITION_ALREADY_OPEN: 'Une position est déjà ouverte : fermez-la avant d’en ouvrir une autre.',
 };
 
 export interface OrderDraft {

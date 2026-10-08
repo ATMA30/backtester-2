@@ -1,9 +1,18 @@
 import Dexie, { Table } from 'dexie';
 import { DatasetMeta, BacktestSession } from '../types/market';
 
+/** The chart as it stood when a trade closed, for the journal. */
+export interface TradeCapture {
+  /** Id of the closed position. */
+  id: string;
+  image: Blob;
+  createdAt: number;
+}
+
 class TradingDB extends Dexie {
   datasets!: Table<DatasetMeta, string>;
   sessions!: Table<BacktestSession, string>;
+  captures!: Table<TradeCapture, string>;
 
   constructor() {
     super('tv_pro_db');
@@ -13,6 +22,11 @@ class TradingDB extends Dexie {
     this.version(2).stores({
       datasets: '&symbol, createdAt',
       sessions: '&id, symbol, updatedAt, createdAt',
+    });
+    this.version(3).stores({
+      datasets: '&symbol, createdAt',
+      sessions: '&id, symbol, updatedAt, createdAt',
+      captures: '&id, createdAt',
     });
   }
 }
@@ -124,3 +138,66 @@ export function getAllBacktestSessions(): Promise<BacktestSession[]> {
 export function deleteBacktestSession(id: string): Promise<WriteResult> {
   return write(() => db.sessions.delete(id), `delete session ${id}`);
 }
+
+// ── TRADE CAPTURES ────────────────────────────────────────────
+export function saveCapture(id: string, image: Blob): Promise<WriteResult> {
+  return write(() => db.captures.put({ id, image, createdAt: Date.now() }), `save capture ${id}`);
+}
+
+export function getCapture(id: string): Promise<Blob | undefined> {
+  return read(async () => (await db.captures.get(id))?.image, undefined, `read capture ${id}`);
+}
+
+export function deleteCapture(id: string): Promise<WriteResult> {
+  return write(() => db.captures.delete(id), `delete capture ${id}`);
+}
+
+/**
+ * Delete the captures no saved session refers to.
+ *
+ * The account lives in memory: at startup, the only trades that still exist are
+ * those of saved sessions. Without this, every capture of an account that was
+ * reset, or never saved, would stay in the browser for good.
+ */
+export async function pruneOrphanCaptures(): Promise<number> {
+  return read(
+    () =>
+      db.transaction('rw', db.sessions, db.captures, async () => {
+        const kept = new Set<string>();
+        // Stored sessions are read raw: one saved before validation existed may
+        // hold anything, and a throw here aborted the pruning at every start.
+        const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : value ? [value] : []);
+        await db.sessions.each((session) => {
+          const record = session as unknown as Record<string, unknown>;
+          for (const p of [...list(record.closedPositions), ...list(record.openPositions), ...list(record.activePosition)]) {
+            const id = (p as { id?: unknown } | null)?.id;
+            if (typeof id === 'string') kept.add(id);
+          }
+        });
+        const orphans = (await db.captures.toCollection().primaryKeys()).filter((id) => !kept.has(id));
+        await db.captures.bulkDelete(orphans);
+        return orphans.length;
+      }),
+    0,
+    'prune captures'
+  );
+}
+
+/**
+ * Clear all tables in the local IndexedDB database.
+ * Used when performing a complete reset of all stored application data.
+ */
+export function clearAllDatabase(): Promise<WriteResult> {
+  return write(
+    () =>
+      db.transaction('rw', [db.datasets, db.sessions, db.captures], async () => {
+        await Promise.all([
+          db.datasets.clear(),
+          db.sessions.clear(),
+          db.captures.clear(),
+        ]);
+      }),
+    'clear all database tables'
+  );
+}
+

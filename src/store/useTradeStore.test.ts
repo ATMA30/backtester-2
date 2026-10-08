@@ -3,6 +3,9 @@ import { useTradeStore } from './useTradeStore';
 import { useDrawingStore } from './useDrawingStore';
 import { Position } from '../types/trading';
 
+/** The oldest open position, or `null` — what `activePosition` used to be. */
+const firstOpen = () => useTradeStore.getState().openPositions[0] ?? null;
+
 // Ces tests portent sur la mécanique du moteur : frais neutralisés. Les frais
 // ont leurs propres tests, dans `useTradeStore.costs.test.ts`.
 beforeEach(() => {
@@ -153,7 +156,7 @@ describe('useTradeStore — position sizing', () => {
     });
 
     // 1% of 10 000 = $100 risked over a 0.0020 stop = 50 000 units (0.50 lot).
-    expect(useTradeStore.getState().activePosition?.size).toBe(50_000);
+    expect(firstOpen()?.size).toBe(50_000);
   });
 
   it('keeps crypto lots as units instead of scaling them by 100 000', () => {
@@ -167,7 +170,7 @@ describe('useTradeStore — position sizing', () => {
       lots: 0.5,
     });
 
-    expect(useTradeStore.getState().activePosition?.size).toBe(0.5);
+    expect(firstOpen()?.size).toBe(0.5);
   });
 
   it('does not scale low-priced crypto by the forex contract size', () => {
@@ -183,7 +186,7 @@ describe('useTradeStore — position sizing', () => {
       lots: 1,
     });
 
-    expect(useTradeStore.getState().activePosition?.size).toBe(1);
+    expect(firstOpen()?.size).toBe(1);
   });
 
   it('honours an explicit lot size instead of silently re-deriving it', () => {
@@ -199,7 +202,7 @@ describe('useTradeStore — position sizing', () => {
       lots: 0.1,
     });
 
-    expect(useTradeStore.getState().activePosition?.size).toBe(10_000);
+    expect(firstOpen()?.size).toBe(10_000);
   });
 });
 
@@ -220,7 +223,7 @@ describe('useTradeStore — order validation', () => {
     });
 
     expect(outcome).toEqual({ ok: false, reason: 'SL_WRONG_SIDE' });
-    expect(useTradeStore.getState().activePosition).toBeNull();
+    expect(firstOpen()).toBeNull();
   });
 
   it('rejects a short whose target sits above the entry', () => {
@@ -251,7 +254,7 @@ describe('useTradeStore — order validation', () => {
     expect(outcome).toEqual({ ok: false, reason: 'NON_FINITE_PRICE' });
   });
 
-  it('refuses to open a second position while one is running', () => {
+  it('opens a second position alongside the first', () => {
     const store = useTradeStore.getState();
     store.openTrade({ symbol: 'EURUSD', type: 'LONG', entry: 1.085, sl: null, tp: null, time: 1, lots: 0.1 });
     const outcome = store.openTrade({
@@ -264,7 +267,9 @@ describe('useTradeStore — order validation', () => {
       lots: 0.1,
     });
 
-    expect(outcome).toEqual({ ok: false, reason: 'POSITION_ALREADY_OPEN' });
+    // Several positions may be open at once, long and short together.
+    expect(outcome.ok).toBe(true);
+    expect(useTradeStore.getState().openPositions.map((p) => p.type)).toEqual(['LONG', 'SHORT']);
   });
 
   it('gives every order a distinct id even within the same millisecond', () => {
@@ -298,7 +303,7 @@ describe('useTradeStore — stop and target fills', () => {
     const closed = useTradeStore.getState().closedPositions[0];
     expect(closed.closeReason).toBe('SL');
     expect(closed.exitPrice).toBe(1.08);
-    expect(useTradeStore.getState().activePosition).toBeNull();
+    expect(firstOpen()).toBeNull();
   });
 
   it('assumes the stop is hit first when one candle spans both stop and target', () => {
@@ -314,7 +319,7 @@ describe('useTradeStore — stop and target fills', () => {
     store.openTrade({ symbol: 'EURUSD', type: 'LONG', entry: 1.09, sl: 1.085, tp: null, time: 1, lots: 0.1 });
     store.updatePrice({ close: Number.NaN, time: 2 });
 
-    expect(useTradeStore.getState().activePosition).not.toBeNull();
+    expect(firstOpen()).not.toBeNull();
     expect(useTradeStore.getState().balance).toBe(10000);
   });
 });
@@ -358,7 +363,7 @@ describe('useTradeStore — restoring untrusted positions', () => {
     useTradeStore.getState().restoreTradeState({
       activePosition: { id: 'x', entry: 1.1, size: 1000, time: 0 } as never,
     });
-    expect(useTradeStore.getState().activePosition).toBeNull();
+    expect(firstOpen()).toBeNull();
   });
 
   it('keeps a well-formed active position', () => {
@@ -374,7 +379,7 @@ describe('useTradeStore — restoring untrusted positions', () => {
         status: 'OPEN',
       },
     });
-    expect(useTradeStore.getState().activePosition?.id).toBe('x');
+    expect(firstOpen()?.id).toBe('x');
   });
 });
 
@@ -413,13 +418,13 @@ describe('useTradeStore — no lookahead', () => {
   it('ignores a candle earlier than the entry (stepping back)', () => {
     open(100);
     useTradeStore.getState().updatePrice({ open: 1.09, high: 1.091, low: 1.08, close: 1.088, time: 99 });
-    expect(useTradeStore.getState().activePosition).not.toBeNull();
+    expect(firstOpen()).not.toBeNull();
   });
 
   it('ignores the entry candle itself (timeframe switch re-feeds it)', () => {
     open(100);
     useTradeStore.getState().updatePrice({ open: 1.09, high: 1.091, low: 1.08, close: 1.09, time: 100 });
-    expect(useTradeStore.getState().activePosition).not.toBeNull();
+    expect(firstOpen()).not.toBeNull();
   });
 
   it('never processes the same candle twice', () => {
@@ -428,9 +433,9 @@ describe('useTradeStore — no lookahead', () => {
     store.updatePrice({ open: 1.09, high: 1.092, low: 1.088, close: 1.09, time: 101 });
     // Replayed later with a range that would hit the stop: already seen.
     store.updatePrice({ open: 1.09, high: 1.092, low: 1.08, close: 1.09, time: 101 });
-    expect(useTradeStore.getState().activePosition).not.toBeNull();
+    expect(firstOpen()).not.toBeNull();
     store.updatePrice({ open: 1.09, high: 1.092, low: 1.08, close: 1.09, time: 102 });
-    expect(useTradeStore.getState().activePosition).toBeNull();
+    expect(firstOpen()).toBeNull();
     expect(useTradeStore.getState().closedPositions[0].closeReason).toBe('SL');
   });
 
@@ -440,14 +445,14 @@ describe('useTradeStore — no lookahead', () => {
       sl: null, tp: null, time: 100, lots: 0.1,
     });
     useTradeStore.getState().updatePrice({ open: 1.09, high: 1.09, low: 1.07, close: 1.085, time: 100 });
-    expect(useTradeStore.getState().activePosition).toBeNull();
+    expect(firstOpen()).toBeNull();
     useTradeStore.getState().updatePrice({ open: 1.085, high: 1.086, low: 1.079, close: 1.08, time: 101 });
-    expect(useTradeStore.getState().activePosition?.entry).toBe(1.08);
+    expect(firstOpen()?.entry).toBe(1.08);
   });
 
   it('dates a partial close with the replay candle, not the wall clock', () => {
     open(100);
-    useTradeStore.getState().closePartial(50, 1.095, 150);
+    useTradeStore.getState().closePartial(firstOpen()!.id, 50, 1.095, 150);
     expect(useTradeStore.getState().closedPositions[0].closeTime).toBe(150);
   });
 });
@@ -459,10 +464,10 @@ describe('useTradeStore — metrics in R', () => {
     const store = useTradeStore.getState();
     // 0.1 lot, 50-pip stop: $50 at risk.
     store.openTrade({ symbol: 'EURUSD', type: 'LONG', entry: 1.1, sl: 1.095, tp: null, time: 1, lots: 0.1 });
-    expect(useTradeStore.getState().activePosition?.riskAmount).toBeCloseTo(50, 6);
+    expect(firstOpen()?.riskAmount).toBeCloseTo(50, 6);
     // Moving the stop to breakeven must not erase what the trade risked.
     useTradeStore.getState().setBreakeven();
-    useTradeStore.getState().closePosition('MANUAL', 1.11, 2); // +$100 = +2 R
+    useTradeStore.getState().closePosition(firstOpen()!.id, 'MANUAL', 1.11, 2); // +$100 = +2 R
 
     const m = useTradeStore.getState().getMetrics();
     expect(m.averageR).toBeCloseTo(2, 6);
@@ -479,14 +484,14 @@ describe('useTradeStore — restored levels', () => {
     useTradeStore.getState().restoreTradeState({
       activePosition: { id: 'p', type: 'LONG', entry: 1.1, size: 1000, time: 1, sl: 'abc', tp: Number.NaN, status: 'OPEN' } as never,
     });
-    const restored = useTradeStore.getState().activePosition;
+    const restored = firstOpen();
     expect(restored?.sl).toBeNull();
     expect(restored?.tp).toBeNull();
   });
 
   it('closes fully when a partial close would leave dust', () => {
     useTradeStore.getState().openTrade({ symbol: 'EURUSD', type: 'LONG', entry: 1.1, sl: null, tp: null, time: 1, lots: 1 });
-    useTradeStore.getState().closePartial(99.999, 1.11, 2);
-    expect(useTradeStore.getState().activePosition).toBeNull();
+    useTradeStore.getState().closePartial(firstOpen()!.id, 99.999, 1.11, 2);
+    expect(firstOpen()).toBeNull();
   });
 });

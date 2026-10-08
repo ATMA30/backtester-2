@@ -160,4 +160,19 @@ describe('useDrawingStore — réparation des canaux', () => {
     ]);
     expect(line.pts).toHaveLength(2);
   });
+
+  it('clearAllSymbolsDrawings efface les dessins de tous les symboles et le stockage', () => {
+    useDrawingStore.getState().addDrawing(makeTrendline('a'));
+    useDrawingStore.getState().setActiveSymbol('VOLATILITY100');
+    useDrawingStore.getState().addDrawing(makeTrendline('b'));
+
+    flushDrawingPersistence();
+    expect(localStorage.getItem('tv_pro_drawings')).not.toBeNull();
+
+    useDrawingStore.getState().clearAllSymbolsDrawings();
+
+    expect(useDrawingStore.getState().drawings).toHaveLength(0);
+    expect(useDrawingStore.getState().drawingsBySymbol).toEqual({});
+    expect(localStorage.getItem('tv_pro_drawings')).toBeNull();
+  });
 });

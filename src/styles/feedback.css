@@ -1,0 +1,246 @@
+/* Retours : notifications, écrans d’erreur. */
+
+/* ══════════════════════════════════════════════════════════════════
+   TOAST NOTIFICATIONS
+══════════════════════════════════════════════════════════════════ */
+#toast-container {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  width: 340px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--bg-glass-card);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-lg);
+  pointer-events: all;
+  overflow: hidden;
+  position: relative;
+  /* Une `transition` depuis `opacity: 0` exige un changement de classe APRÈS le
+     montage. Le modificateur prévu pour cela — `.toast-show` — n'était appliqué
+     par aucun composant, donc chaque toast restait à `opacity: 0`, décalé hors
+     de l'écran : les 78 appels à `showToast` du projet ne produisaient rien.
+     Une `animation` se déclenche au montage, sans état à piloter côté React. */
+  animation: toastIn 0.32s var(--ease-out) both;
+}
+
+@keyframes toastIn {
+  from { transform: translateX(calc(100% + 24px)); opacity: 0; }
+  to   { transform: translateX(0);                 opacity: 1; }
+}
+
+/* Les toasts apparaissent sans prévenir, en marge du regard : c'est exactement
+   le mouvement qu'un réglage « moins d'animations » veut voir disparaître. */
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
+  .toast-progress { animation: none !important; }
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.toast-body { flex: 1; min-width: 0; }
+
+.toast-msg {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 3px;
+  flex-shrink: 0;
+  transition: color 0.12s;
+  line-height: 1;
+  margin-top: 1px;
+}
+.toast-close:hover { color: var(--text-secondary); }
+
+.toast-progress {
+  position: absolute;
+  bottom: 0; left: 0;
+  height: 2px; width: 100%;
+  transform-origin: left;
+  /* La durée vient du toast lui-même. Les quatre valeurs codées en dur (4 s,
+     5 s, 4 s, 3,5 s) ne correspondaient à aucune durée réelle : les appelants
+     passent de 2 000 à 8 000 ms, donc la barre finissait sa course bien avant
+     la disparition, ou restait pleine au moment où le toast s'effaçait. */
+  animation: toastProg var(--toast-duration, 3000ms) linear forwards;
+}
+@keyframes toastProg { from{transform:scaleX(1)} to{transform:scaleX(0)} }
+
+.toast-success { border-left: 3px solid var(--bull); }
+.toast-success .toast-icon { color: var(--bull); }
+.toast-success .toast-progress { background: var(--bull); }
+
+.toast-error { border-left: 3px solid var(--bear); }
+.toast-error .toast-icon { color: var(--bear); }
+.toast-error .toast-progress { background: var(--bear); }
+
+.toast-warning { border-left: 3px solid var(--gold); }
+.toast-warning .toast-icon { color: var(--gold); }
+.toast-warning .toast-progress { background: var(--gold); }
+
+.toast-info { border-left: 3px solid var(--accent); }
+.toast-info .toast-icon { color: var(--accent); }
+.toast-info .toast-progress { background: var(--accent); }
+
+/* ══════════════════════════════════════════════════════════════════
+   ERROR BOUNDARY
+
+   `ErrorBoundary` renders `.error-boundary`, `.error-boundary-detail` and
+   `.error-boundary-actions`, and none of the three had ever been declared. A
+   caught render error therefore produced unstyled black-on-transparent text and
+   two default browser buttons stretched across the chart area — a fallback that
+   looked more broken than the crash it was catching. Nothing warns about a class
+   that is referenced but never defined: not the typechecker, not the linter, not
+   the tests.
+══════════════════════════════════════════════════════════════════ */
+.error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  padding: 32px 24px;
+  text-align: center;
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+.error-boundary > svg {
+  color: var(--gold);
+}
+
+.error-boundary h2 {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.error-boundary-detail {
+  margin: 0;
+  max-width: 560px;
+  /* The message comes from a thrown Error and can be a single very long token
+     (a minified stack frame, a URL). Without these it forces its intrinsic
+     width on the flex column and pushes the buttons off-screen. */
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+
+.error-boundary-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.error-boundary-actions button {
+  height: 32px;
+  padding: 0 16px;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background 0.13s var(--ease-snappy),
+    color 0.13s var(--ease-snappy),
+    border-color 0.13s var(--ease-snappy);
+}
+
+.error-boundary-actions button:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  border-color: var(--border-active);
+}
+
+/* "Réinitialiser la session" clears localStorage: it must not read as the
+   safe default sitting next to "Réessayer". */
+.error-boundary-actions button:last-child {
+  color: var(--bear-bright);
+  border-color: var(--bear-border);
+  background: var(--bear-dim);
+}
+
+.error-boundary-actions button:last-child:hover {
+  background: rgba(244, 63, 94, 0.20);
+  border-color: var(--bear);
+  color: var(--bear-bright);
+}
+
+/* Encart réduit : une zone secondaire (barre, modale) a planté mais le reste de
+   l'application fonctionne encore — ne pas le recouvrir. */
+.error-boundary.error-boundary-compact {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 10000;
+  transform: translateX(-50%);
+  flex: none;
+  flex-direction: row;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.error-boundary-compact p {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.error-boundary-compact > svg {
+  flex-shrink: 0;
+}
+
+/* Le seul bouton est « Fermer » : pas la teinte d'alerte du dernier bouton. */
+.error-boundary-compact .error-boundary-actions button:last-child {
+  color: var(--text-secondary);
+  border-color: var(--border-light);
+  background: var(--bg-overlay);
+}

@@ -15,5 +15,12 @@ export function csvCell(value: unknown): string {
   // entre guillemets. Un texte qui commence par = + - @ tab ou CR est préfixé
   // d'une apostrophe, qui le force en texte.
   if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  // Un Excel réglé en français ouvre le fichier avec « ; » comme séparateur :
+  // la ligne entière est alors mal découpée, les guillemets (qui ne comptent
+  // qu'en début de champ) ne protègent plus rien, et « note;=cmd|… » donne une
+  // cellule qui commence par « = ». Tout séparateur suivi d'une formule est
+  // donc neutralisé à l'intérieur du texte aussi.
+  text = text.replace(/([;,\t])(?=[=+\-@])/g, "$1'");
+  // Toujours entre guillemets : un séparateur entre guillemets n'en est jamais un.
+  return `"${text.replace(/"/g, '""')}"`;
 }

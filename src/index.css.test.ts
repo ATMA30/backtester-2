@@ -26,7 +26,18 @@ function collectSources(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const css = readFileSync(join(ROOT, 'index.css'), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '');
+/**
+ * The whole stylesheet, in cascade order: `index.css` only lists the sheets of
+ * `styles/`, and a test reading it alone would see no rule at all.
+ */
+function readStylesheet(): string {
+  const entry = readFileSync(join(ROOT, 'index.css'), 'utf-8');
+  const imported = [...entry.matchAll(/@import\s+'\.\/(styles\/[\w-]+\.css)'/g)].map((m) => m[1]);
+  if (imported.length === 0) throw new Error('index.css imports no stylesheet');
+  return [entry, ...imported.map((file) => readFileSync(join(ROOT, file), 'utf-8'))].join('\n');
+}
+
+const css = readStylesheet().replace(/\/\*[\s\S]*?\*\//g, '');
 const tsx = collectSources(ROOT).join('\n');
 
 /** Every class name declared anywhere in the stylesheet. */
@@ -166,7 +177,12 @@ describe('index.css — conteneurs qui rognent leurs menus', () => {
   it('les menus de la barre de replay passent par le registre partagé', () => {
     // Trois `useState` locaux ne se fermaient ni l'un l'autre, ni au clic
     // extérieur — que `App` pilote via `activeDropdown`.
-    const replayBar = readFileSync(join(ROOT, 'components/Replay/ReplayBar.tsx'), 'utf-8');
+    // The bar is split across `components/Replay/`: read all of it.
+    const replayDir = join(ROOT, 'components/Replay');
+    const replayBar = readdirSync(replayDir)
+      .filter((file) => file.endsWith('.tsx') && !file.includes('.test.'))
+      .map((file) => readFileSync(join(replayDir, file), 'utf-8'))
+      .join('\n');
     expect(replayBar).not.toMatch(/useState\(false\)/);
     for (const id of ['rp-anchor', 'rp-speed', 'rp-orders']) {
       expect(replayBar).toContain(id);

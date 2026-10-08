@@ -1,6 +1,6 @@
 import { Position, PendingOrder } from './trading';
 import { Drawing } from './drawing';
-import type { MarketCategory } from '../domain/instruments';
+import type { AccountCurrency, MarketCategory } from '../domain/instruments';
 
 export interface Candle {
   time: number;
@@ -96,8 +96,12 @@ export interface BacktestSession {
   initialBalance: number;
   riskPercent: number;
   quantity: number;
+  /** Absent from sessions saved before it could change: those were in USD. */
+  accountCurrency?: AccountCurrency;
   closedPositions: Position[];
-  activePosition: Position | null;
+  openPositions: Position[];
+  /** Sessions saved before several positions could be open at once. Read only. */
+  activePosition?: Position | null;
   pendingOrders: PendingOrder[];
 
   // Drawings State

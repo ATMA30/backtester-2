@@ -12,10 +12,10 @@ describe('useTradeStore — spread, commission, slippage', () => {
 
   it('buys at the ask and charges both commissions', () => {
     store().openTrade({ symbol: 'EURUSD', type: 'LONG', entry: 1.1, sl: null, tp: null, time: 1, lots: 1 });
-    expect(store().activePosition?.entry).toBeCloseTo(1.1001, 10);
+    expect((store().openPositions[0] ?? null)?.entry).toBeCloseTo(1.1001, 10);
 
     // Closing at the same bid loses the spread ($10) and two commissions ($7).
-    store().closeAtMarket(1.1, 2);
+    store().closeAtMarket(store().openPositions[0].id, 1.1, 2);
     const trade = store().closedPositions[0];
     expect(trade.pnl).toBeCloseTo(-17, 6);
     expect(trade.fees).toBeCloseTo(17, 6);
@@ -24,8 +24,8 @@ describe('useTradeStore — spread, commission, slippage', () => {
 
   it('sells at the bid and buys back at the ask', () => {
     store().openTrade({ symbol: 'EURUSD', type: 'SHORT', entry: 1.1, sl: null, tp: null, time: 1, lots: 1 });
-    expect(store().activePosition?.entry).toBe(1.1);
-    store().closeAtMarket(1.1, 2);
+    expect((store().openPositions[0] ?? null)?.entry).toBe(1.1);
+    store().closeAtMarket(store().openPositions[0].id, 1.1, 2);
     expect(store().closedPositions[0].exitPrice).toBeCloseTo(1.1001, 10);
   });
 
@@ -33,7 +33,7 @@ describe('useTradeStore — spread, commission, slippage', () => {
     store().openTrade({ symbol: 'EURUSD', type: 'SHORT', entry: 1.1, sl: 1.1010, tp: null, time: 1, lots: 1 });
     // The bid high reaches 1.1009.5: the ask (bid + 1 pip) crosses the stop.
     store().updatePrice({ open: 1.1, high: 1.10095, low: 1.0995, close: 1.1, time: 2 });
-    expect(store().activePosition).toBeNull();
+    expect((store().openPositions[0] ?? null)).toBeNull();
     expect(store().closedPositions[0].closeReason).toBe('SL');
   });
 
@@ -47,7 +47,7 @@ describe('useTradeStore — spread, commission, slippage', () => {
   it('charges nothing when costs are switched off', () => {
     store().setCosts({ enabled: false });
     store().openTrade({ symbol: 'EURUSD', type: 'LONG', entry: 1.1, sl: null, tp: null, time: 1, lots: 1 });
-    store().closeAtMarket(1.1, 2);
+    store().closeAtMarket(store().openPositions[0].id, 1.1, 2);
     expect(store().closedPositions[0].pnl).toBe(0);
   });
 

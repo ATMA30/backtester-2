@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IChartApi, LogicalRange, UTCTimestamp } from 'lightweight-charts';
 import { Candle } from '../../types/market';
 
@@ -27,22 +27,21 @@ import { Candle } from '../../types/market';
 const DEFAULT_VISIBLE_BARS = 90;
 /** Blank bars kept to the right of the last candle, so it is never glued to the edge. */
 const RIGHT_MARGIN_BARS = 6;
+/**
+ * The margin is the user's to choose — dragging the chart while the last
+ * candle is on screen sets it, and playback keeps it — within these bounds:
+ * never glued to the price scale, never more than most of the screen empty.
+ */
+const MIN_RIGHT_MARGIN_BARS = 2;
+const MAX_RIGHT_MARGIN_RATIO = 0.75;
 /** Below this span a restored window is treated as degenerate and refitted. */
 const MIN_VISIBLE_BARS = 3;
 /**
- * Backward pan, in bars, that releases auto-scroll.
- *
- * It must be *small*. The previous rule compared the right edge to
- * `barCount - 1 - 2` while auto-scroll parks that edge at `barCount + 6`: nine
- * bars of slack. Any shorter drag was read as "still at the tail" and the next
- * tick shoved the view forward again — at 32x, fifty times a second, so the
- * chart fought the drag and the user could not get back into history at all.
- * Two bars is just enough to absorb the one-bar staleness of `lastBarCountRef`
- * between two ticks.
+ * Silence after the last wheel event that ends a trackpad gesture. A trackpad
+ * emits a stream of tiny wheel events (and momentum after the fingers lift);
+ * a pause this long means the gesture is over.
  */
-const PAN_RELEASE_BARS = 2;
-/** Relative span change above which a range event is a zoom, not a pan. */
-const ZOOM_SPAN_EPSILON = 0.02;
+const WHEEL_GESTURE_IDLE_MS = 220;
 /**
  * Fewest bars a preserved time window may resolve to.
  *
@@ -68,9 +67,14 @@ export interface ApplyOptions {
   readonly keepTimeWindow?: boolean;
   /** Auto-scroll with the last candle while the user is following the tail. */
   readonly followTail?: boolean;
+  /**
+   * Bars removed from the left of the series since the snapshot (the replay
+   * window sliding forward). The same bar now sits that many indices lower.
+   */
+  readonly droppedBars?: number;
 }
 
-interface ChartViewport {
+export interface ChartViewportControls {
   /**
    * Record the current view, against the bar count the user is looking at.
    * Call before mutating series data.
@@ -80,6 +84,15 @@ interface ChartViewport {
   apply: (snapshot: ViewportSnapshot, candles: readonly Candle[], options?: ApplyOptions) => void;
   /** Fit all data and clear the follow state. */
   fit: () => void;
+  /** Scroll back to the last candle and follow it again. */
+  resumeFollow: () => void;
+}
+
+interface ChartViewport extends ChartViewportControls {
+  /** False while the user looks at history instead of following the tail. */
+  isFollowing: boolean;
+  /** Stable object for effect dependencies (excludes `isFollowing`). */
+  controller: ChartViewportControls;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -87,11 +100,6 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function useChartViewport(chart: IChartApi | null): ChartViewport {
-  /**
-   * Set while we drive the time scale ourselves, so the range subscription can
-   * tell our own writes from a genuine pan or zoom by the user.
-   */
-  const isProgrammaticRef = useRef(false);
   /**
    * Whether auto-scroll should keep the last candle in view.
    *
@@ -104,72 +112,92 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
   const followRef = useRef(true);
   /** Bar count the currently displayed range is measured against. */
   const lastBarCountRef = useRef(0);
-  /** Span of the last range we saw, to tell a zoom from a pan. */
-  const lastSpanRef = useRef(0);
   /** True between pointer-down on the chart and pointer-up: a drag in progress. */
   const isDraggingRef = useRef(false);
-  /** Right edge of the view when the current drag started, in bar indices. */
-  const dragStartToRef = useRef<number | null>(null);
+  /** Same for a trackpad / wheel gesture, which never fires a pointer-down. */
+  const isWheelingRef = useRef(false);
+  const wheelTimerRef = useRef<number | null>(null);
+  /** Right margin, in bars, when the current gesture began (see `adoptView`). */
+  const gestureStartMarginRef = useRef<number | null>(null);
+  /**
+   * Mirror of `followRef` for rendering: the chart shows a "back to the
+   * present" button while the user is looking at history during playback.
+   */
+  const [isFollowing, setIsFollowing] = useState(true);
+  /** Blank bars playback keeps right of the last candle — set by the user's pan. */
+  const followOffsetRef = useRef(RIGHT_MARGIN_BARS);
+
+  const setFollow = useCallback((value: boolean) => {
+    followRef.current = value;
+    setIsFollowing(value);
+  }, []);
+
+  /**
+   * Read the view where the user left it, once their gesture is over.
+   *
+   * Last candle still on screen: they are watching the present, at the margin
+   * they just chose — playback keeps that gap to the price scale instead of
+   * snapping back to a fixed six bars. Last candle pushed off screen: they are
+   * reading history, and playback leaves the view alone until they come back.
+   */
+  const adoptView = useCallback(
+    (range: LogicalRange, count: number, startMargin: number | null = null) => {
+      const lastBar = count - 1;
+      const lastBarOnScreen = range.to >= lastBar + 0.5 && range.from <= lastBar;
+      if (!lastBarOnScreen) {
+        setFollow(false);
+        return;
+      }
+      // Pushing past the edge. A gesture that starts with the last candle
+      // already against the minimum margin and moves further back wants
+      // history. Clamped back to the minimum, a slow wheel — one notch per
+      // gesture, each a fraction of a bar — could never leave the present.
+      //
+      // The last candle must then actually leave the screen: while it is
+      // visible, the library shifts the view by itself on every new bar, and
+      // the chart would keep following under a « Revenir au présent » button.
+      const margin = range.to - count;
+      if (startMargin !== null && startMargin <= MIN_RIGHT_MARGIN_BARS + 0.5 && margin < startMargin - 0.05) {
+        if (chart) {
+          // Half the last bar past the right edge.
+          const shift = margin + 1.5;
+          try {
+            chart.timeScale().setVisibleLogicalRange({ from: range.from - shift, to: range.to - shift });
+          } catch (error) {
+            console.warn('[viewport] setVisibleLogicalRange failed:', error);
+          }
+        }
+        setFollow(false);
+        return;
+      }
+      const span = range.to - range.from;
+      followOffsetRef.current = clamp(
+        range.to - count,
+        MIN_RIGHT_MARGIN_BARS,
+        Math.max(MIN_RIGHT_MARGIN_BARS, span * MAX_RIGHT_MARGIN_RATIO)
+      );
+      setFollow(true);
+    },
+    [chart, setFollow]
+  );
 
   const setLogicalRange = useCallback(
     (chartApi: IChartApi, from: number, to: number) => {
-      isProgrammaticRef.current = true;
       try {
         chartApi.timeScale().setVisibleLogicalRange({ from, to });
       } catch (error) {
         console.warn('[viewport] setVisibleLogicalRange failed:', error);
-      } finally {
-        lastSpanRef.current = to - from;
-        // Release on the next frame: the library emits the range event
-        // asynchronously, after this call returns.
-        requestAnimationFrame(() => {
-          isProgrammaticRef.current = false;
-        });
       }
     },
     []
   );
 
-  // Track genuine user interaction with the time scale.
-  useEffect(() => {
-    if (!chart) return;
-
-    const handleRangeChange = (range: LogicalRange | null) => {
-      const previousSpan = lastSpanRef.current;
-      if (range) lastSpanRef.current = range.to - range.from;
-      if (isProgrammaticRef.current || !range) return;
-
-      const count = lastBarCountRef.current;
-      if (count === 0) return;
-
-      const span = range.to - range.from;
-      const isZoom =
-        previousSpan > 0 && Math.abs(span - previousSpan) > Math.max(1, previousSpan * ZOOM_SPAN_EPSILON);
-
-      if (isZoom) {
-        // Zooming must not silently stop playback from following. The wheel is
-        // anchored on the cursor, so zooming in mid-chart moves the right edge
-        // backwards; judging that by position alone cut auto-scroll off the
-        // moment the user leaned in to read the current candle. Keep following
-        // as long as the last candle is still framed — at the new zoom level.
-        followRef.current = range.to >= count - 1 && range.from <= count - 1;
-        return;
-      }
-
-      // Mid-drag the geometry says nothing: auto-scroll re-parks the edge
-      // between two mouse-move events, so the gesture never accumulates and
-      // every sample reads as "still at the tail". The release is decided once,
-      // on pointer-up, below.
-      if (isDraggingRef.current) return;
-
-      // Constant span: this is a deliberate pan. Compare against where
-      // auto-scroll parks the edge, not against the last bar index.
-      followRef.current = range.to >= count + RIGHT_MARGIN_BARS - PAN_RELEASE_BARS;
-    };
-
-    chart.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
-    return () => chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleRangeChange);
-  }, [chart]);
+  // No range-change subscription on purpose. The library shifts the view by
+  // itself when bars are appended, and those events look exactly like a user
+  // pan: read as one, against a bar count one tick stale, each widened the
+  // remembered right margin by a bar — the gap to the price scale grew by a
+  // candle per tick. Only real gestures (drag, wheel, trackpad, pinch) change
+  // the follow state or the margin, and they are judged once they end, below.
 
   /**
    * Grabbing the chart suspends auto-scroll for the whole gesture.
@@ -190,46 +218,75 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
     // `chartElement()` never fires once. Their common parent sees both.
     const surface = element.parentElement ?? element;
 
+    /** Where the gesture starts from, for `adoptView` to tell a push past the edge. */
+    const recordStart = () => {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      const count = lastBarCountRef.current;
+      gestureStartMarginRef.current = range && count > 0 ? range.to - count : null;
+    };
+
     const handlePointerDown = () => {
       isDraggingRef.current = true;
-      dragStartToRef.current = chart.timeScale().getVisibleLogicalRange()?.to ?? null;
+      recordStart();
     };
 
     const handlePointerUp = () => {
       if (!isDraggingRef.current) return;
       isDraggingRef.current = false;
 
-      const startTo = dragStartToRef.current;
-      dragStartToRef.current = null;
+      const count = lastBarCountRef.current;
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (!range || count === 0) return;
+      // Auto-scroll was suspended for the whole drag, so the view is exactly
+      // where the hand left it: judge that, once.
+      adoptView(range, count, gestureStartMarginRef.current);
+    };
+
+    /**
+     * Trackpad and wheel: the same rule as a drag.
+     *
+     * A two-finger swipe fires no pointer-down, only a stream of tiny wheel
+     * events, each moving the view by a fraction of a bar. Judged one by one
+     * against the 2-bar pan threshold, none of them released auto-scroll, and
+     * the next tick pulled the chart back to the present: going back in time
+     * during playback was impossible with a trackpad. The gesture now suspends
+     * auto-scroll until it goes quiet, then is judged on its total movement.
+     */
+    const endWheelGesture = () => {
+      wheelTimerRef.current = null;
+      isWheelingRef.current = false;
 
       const count = lastBarCountRef.current;
       const range = chart.timeScale().getVisibleLogicalRange();
       if (!range || count === 0) return;
 
-      // Measure the gesture itself, not the distance to the tail: the tail
-      // moves while the drag is in progress, so a fixed target would make the
-      // same gesture release or not depending on playback speed.
-      const barsMovedBack = startTo === null ? 0 : startTo - range.to;
-      if (barsMovedBack > PAN_RELEASE_BARS) {
-        followRef.current = false;
-        return;
-      }
-      // A plain click, or a drag forward: keep following if we are back at the
-      // edge where auto-scroll parks the view.
-      followRef.current = range.to >= count + RIGHT_MARGIN_BARS - PAN_RELEASE_BARS;
+      // Zoom or pan, the rule is the same: is the last candle still on screen?
+      adoptView(range, count, gestureStartMarginRef.current);
+    };
+
+    const handleWheel = () => {
+      if (!isWheelingRef.current) recordStart();
+      isWheelingRef.current = true;
+      if (wheelTimerRef.current !== null) window.clearTimeout(wheelTimerRef.current);
+      wheelTimerRef.current = window.setTimeout(endWheelGesture, WHEEL_GESTURE_IDLE_MS);
     };
 
     surface.addEventListener('pointerdown', handlePointerDown);
+    // Capture phase: the library handles the wheel on its own node, and the
+    // drawing overlay may stop propagation; the capture listener sees it first.
+    surface.addEventListener('wheel', handleWheel, { capture: true, passive: true });
     // On window: a drag routinely ends outside the chart, and a pointer-up we
     // never see would leave auto-scroll suspended for good.
     window.addEventListener('pointerup', handlePointerUp);
     window.addEventListener('pointercancel', handlePointerUp);
     return () => {
       surface.removeEventListener('pointerdown', handlePointerDown);
+      surface.removeEventListener('wheel', handleWheel, { capture: true });
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
+      if (wheelTimerRef.current !== null) window.clearTimeout(wheelTimerRef.current);
     };
-  }, [chart]);
+  }, [chart, adoptView]);
 
   const readCurrentView = useCallback((): Omit<ViewportSnapshot, 'barCount' | 'wasFollowingTail'> => {
     if (!chart) return { logical: null, timeWindow: null };
@@ -257,7 +314,9 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
       // "Following the tail" is what decides whether replay may auto-scroll.
       // With no view yet there is nothing to preserve, so follow by default.
       const wasFollowingTail =
-        view.logical === null || barCount === 0 ? true : followRef.current && !isDraggingRef.current;
+        view.logical === null || barCount === 0
+          ? true
+          : followRef.current && !isDraggingRef.current && !isWheelingRef.current;
 
       return { ...view, barCount, wasFollowingTail };
     },
@@ -266,27 +325,24 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
 
   const fit = useCallback(() => {
     if (!chart) return;
-    isProgrammaticRef.current = true;
-    try {
-      chart.timeScale().fitContent();
-    } finally {
-      requestAnimationFrame(() => {
-        isProgrammaticRef.current = false;
-      });
-    }
-    followRef.current = true;
-  }, [chart]);
+    chart.timeScale().fitContent();
+    followOffsetRef.current = RIGHT_MARGIN_BARS;
+    setFollow(true);
+  }, [chart, setFollow]);
 
   const apply = useCallback(
     (snapshot: ViewportSnapshot, candles: readonly Candle[], options: ApplyOptions = {}) => {
       if (!chart || candles.length === 0) return;
 
       const count = candles.length;
-      const { refit = false, keepTimeWindow = false, followTail = false } = options;
+      const { refit = false, keepTimeWindow = false, followTail = false, droppedBars = 0 } = options;
 
       // Range events fired from here on are measured against the new series.
       lastBarCountRef.current = count;
-      if (refit) followRef.current = true;
+      if (refit) {
+        followOffsetRef.current = RIGHT_MARGIN_BARS;
+        setFollow(true);
+      }
 
       /**
        * Show the last `bars` bars, right margin included.
@@ -298,8 +354,9 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
        * so a 40-bar zoom decayed to 280 bars within seconds.
        */
       const showTail = (bars: number) => {
-        const span = clamp(bars, MIN_VISIBLE_BARS, Math.max(MIN_VISIBLE_BARS, count + RIGHT_MARGIN_BARS));
-        const to = count + RIGHT_MARGIN_BARS;
+        const margin = followOffsetRef.current;
+        const span = clamp(bars, MIN_VISIBLE_BARS, Math.max(MIN_VISIBLE_BARS, count + margin));
+        const to = count + margin;
         setLogicalRange(chart, to - span, to);
       };
 
@@ -342,7 +399,6 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
           return;
         }
 
-        isProgrammaticRef.current = true;
         try {
           chart.timeScale().setVisibleRange({
             from: clamp(from, firstTime, lastTime) as UTCTimestamp,
@@ -351,10 +407,6 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
         } catch (error) {
           console.warn('[viewport] setVisibleRange failed, refitting:', error);
           showTail(DEFAULT_VISIBLE_BARS);
-        } finally {
-          requestAnimationFrame(() => {
-            isProgrammaticRef.current = false;
-          });
         }
         return;
       }
@@ -364,7 +416,11 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
       // they scroll forward again.
       if (followTail) {
         if (snapshot.wasFollowingTail) showTail(span);
-        // Otherwise: leave the viewport exactly where the user put it.
+        // Otherwise: leave the viewport exactly where the user put it — on the
+        // same bars, which moved down by however many were dropped on the left.
+        else if (droppedBars > 0) {
+          setLogicalRange(chart, snapshot.logical.from - droppedBars, snapshot.logical.to - droppedBars);
+        }
         return;
       }
 
@@ -373,10 +429,28 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
       const isOffscreen = snapshot.logical.from >= count || snapshot.logical.to <= 0;
       if (isOffscreen) showTail(span);
     },
-    [chart, fit, setLogicalRange]
+    [chart, fit, setLogicalRange, setFollow]
   );
+
+  /** Jump back to the last candle and follow it again, keeping the zoom. */
+  const resumeFollow = useCallback(() => {
+    if (!chart) return;
+    const count = lastBarCountRef.current;
+    const range = chart.timeScale().getVisibleLogicalRange();
+    const span = range ? range.to - range.from : DEFAULT_VISIBLE_BARS;
+    // Back at the margin the user last chose, not a fixed one.
+    const to = count + followOffsetRef.current;
+    setLogicalRange(chart, to - span, to);
+    setFollow(true);
+  }, [chart, setLogicalRange, setFollow]);
 
   // Memoised: the returned object goes into the chart effect's dependency
   // array, so a fresh identity per render would re-run `setData` every time.
-  return useMemo(() => ({ capture, apply, fit }), [capture, apply, fit]);
+  // `isFollowing` is deliberately left out of that object's identity: the
+  // data effect reads the follow state through `capture`, not through it.
+  const controller = useMemo(
+    () => ({ capture, apply, fit, resumeFollow }),
+    [capture, apply, fit, resumeFollow]
+  );
+  return { ...controller, isFollowing, controller };
 }

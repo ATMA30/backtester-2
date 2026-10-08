@@ -21,7 +21,7 @@ export const SnapshotModal: React.FC = () => {
           outCanvas.height = mainCanvas.height;
           const ctx = outCanvas.getContext('2d');
           if (ctx) {
-            ctx.fillStyle = '#0B0E14';
+            ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, outCanvas.width, outCanvas.height);
 
             canvases.forEach((c) => {
@@ -31,13 +31,13 @@ export const SnapshotModal: React.FC = () => {
             });
 
             const dpr = window.devicePixelRatio || 1;
-            ctx.fillStyle = 'rgba(11, 14, 20, 0.85)';
+            ctx.fillStyle = 'rgba(17, 17, 17, 0.90)';
             ctx.fillRect(16 * dpr, (outCanvas.height / dpr - 42) * dpr, 340 * dpr, 30 * dpr);
-            ctx.fillStyle = '#00C46E';
+            ctx.fillStyle = '#16A34A';
             ctx.font = `bold ${12 * dpr}px Inter, sans-serif`;
             ctx.fillText(`TradeView Pro`, 26 * dpr, (outCanvas.height / dpr - 22) * dpr);
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = `${11 * dpr}px JetBrains Mono, monospace`;
+            ctx.fillStyle = '#FAFAFA';
+            ctx.font = `${11 * dpr}px Inter, sans-serif`;
             ctx.fillText(` • ${currentSymbol} • ${new Date().toLocaleDateString('fr-FR')}`, 120 * dpr, (outCanvas.height / dpr - 22) * dpr);
 
             requestAnimationFrame(() => {
@@ -78,42 +78,42 @@ export const SnapshotModal: React.FC = () => {
   };
 
   return (
-    <div id="snapshot-modal" className="custom-modal open u-display-flex u-opacity-1" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
-      <div className="custom-modal-box snapshot-box u-max-width-820px" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Capture du graphique">
+    <div id="snapshot-modal" className="custom-modal open modal-overlay-open" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+      <div className="custom-modal-box snapshot-box snap-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Capture du graphique">
         <div className="custom-modal-header">
-          <div className="custom-modal-title u-display-flex u-align-items-center u-gap-8px">
-            <Camera size={16} strokeWidth={2} className="u-color-38bdf8" />
+          <div className="custom-modal-title modal-title-row">
+            <Camera size={16} strokeWidth={2} className="modal-title-icon" />
             <span>Capture du graphique</span>
           </div>
-          <button className="custom-modal-close u-display-flex u-align-items-center u-justify-content-center" onClick={closeModal}>
+          <button className="custom-modal-close modal-close-btn" onClick={closeModal}>
             <X size={15} strokeWidth={2.4} />
           </button>
         </div>
 
-        <div className="custom-modal-body snapshot-body u-padding-16px u-text-align-center">
+        <div className="custom-modal-body snapshot-body snap-preview">
           {activeImg ? (
-            <img src={activeImg} alt="Aperçu Capture" className="snapshot-img u-width-100pct u-border-radius-radius-sm u-border-1px-solid-border-light u-box-shadow-shadow-lg" />
+            <img src={activeImg} alt="Aperçu Capture" className="snapshot-img snap-image" />
           ) : (
-            <div className="u-padding-60px u-color-text-muted">Génération de l’image…</div>
+            <div className="snap-loading">Génération de l’image…</div>
           )}
         </div>
 
-        <div className="custom-modal-actions u-padding-12px-16px u-display-flex u-justify-content-flex-end u-gap-8px">
+        <div className="custom-modal-actions snap-actions">
           <button
-            className="trade-btn buy u-height-34px u-padding-0-16px u-display-flex u-align-items-center u-gap-6px"
+            className="trade-btn buy snap-copy-btn"
             onClick={copyToClipboard}
           >
             <Copy size={13} strokeWidth={2} />
             <span>Copier l'image</span>
           </button>
           <button
-            className="trade-btn u-height-34px u-padding-0-16px u-background-accent u-color-fff u-display-flex u-align-items-center u-gap-6px"
+            className="trade-btn snap-save-btn"
             onClick={downloadPNG}
           >
             <Download size={13} strokeWidth={2} />
             <span>Enregistrer en PNG</span>
           </button>
-          <button className="trade-btn u-height-34px u-padding-0-14px u-background-bg-elevated u-color-text-secondary" onClick={closeModal}>Fermer</button>
+          <button className="trade-btn snap-close-btn" onClick={closeModal}>Fermer</button>
         </div>
       </div>
     </div>

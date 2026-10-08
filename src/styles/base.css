@@ -1,0 +1,116 @@
+/* Base : réinitialisations, défilement, sélection, focus, mise en page, barre d’état. */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   BASE
+══════════════════════════════════════════════════════════════════ */
+html, body {
+  height: 100%;
+  font-family: var(--font);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'kern' 1, 'liga' 1;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* Selection */
+::selection { background: var(--accent-dim); color: var(--text-primary); }
+
+/* Focus */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   LAYOUT
+══════════════════════════════════════════════════════════════════ */
+#layout {
+  display: flex;
+  height: calc(100vh - 46px);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   STATUS BAR
+══════════════════════════════════════════════════════════════════ */
+#statusbar {
+  height: var(--statusbar-h);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 16px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  /* Subtle top separator */
+  box-shadow: 0 -1px 0 rgba(255,255,255,0.025) inset;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.status-item strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.status-dot.green {
+  background: var(--bull);
+  box-shadow: 0 0 6px var(--bull-glow);
+}
+
+.status-dot.yellow {
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--gold-dim);
+}
+
+/* Real market data loaded. `.online` was referenced by the status bar but never
+   defined, so the dot stayed muted grey whatever the state. */
+.status-dot.online {
+  background: var(--bull);
+  box-shadow: 0 0 6px var(--bull-glow);
+}
+
+/* Locally generated series — must not be mistaken for market data. */
+.status-dot.simulated {
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--gold-dim);
+}
+
+.status-replay-icon {
+  font-size: 11px;
+  opacity: 0.8;
+}

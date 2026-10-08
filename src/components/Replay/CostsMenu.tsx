@@ -34,20 +34,20 @@ export const CostsMenu: React.FC<{ symbol: string; price: number }> = ({ symbol,
     spec.spreadPips !== undefined ? `${spec.spreadPips} pips` : `${spec.spreadBps} pb du prix`;
 
   const summary = costs.enabled
-    ? `${spreadPips.toFixed(1)} p · ${formatMoney(resolved.commissionPerLot)}/lot`
-    : 'hors frais';
+    ? `${spreadPips.toFixed(1)} p · ${formatMoney(resolved.commissionPerLot)}`
+    : 'désactivés';
 
   return (
-    <div className="tv-dropdown u-position-relative">
+    <div className="tv-dropdown rp-costs">
       <button
         type="button"
         className={`rp-costs-btn ${costs.enabled ? '' : 'is-off'}`}
         onClick={() => toggleDropdown('rp-costs')}
-        title="Spread, commission et slippage appliqués aux ordres"
+        title={`Spread, commission (par lot et par sens) et slippage appliqués aux ordres${costs.enabled ? '' : ' — actuellement désactivés'}`}
         aria-expanded={isOpen}
       >
         <Receipt size={11} strokeWidth={2} aria-hidden />
-        <span>Frais : {summary}</span>
+        <span>Frais {summary}</span>
         <ChevronDown size={9} strokeWidth={2.5} aria-hidden />
       </button>
 
