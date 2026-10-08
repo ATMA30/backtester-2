@@ -103,38 +103,29 @@ export function useTimeframeSwitch(): TimeframeSwitch {
 
       const currentBaseLabel = TIMEFRAME_DEFS.find((d) => d.s === baseTF)?.label ?? '1D';
 
-      // ── 2. Coarser than the loaded data: aggregate locally, no network. ──
-      if (timeframe.s >= baseTF) {
-        const returningToDaily =
-          !isImported && isMarketPair && timeframe.s >= TimeframeSeconds.D1 && baseTF < TimeframeSeconds.D1;
-
+      // ── 1. Même granularité déjà active et chargée : rien à faire. ──
+      if (timeframe.s === activeTF && timeframe.s === baseTF) {
         closeAllDropdowns();
-
-        // Tenter d'abord l'archive journalière profonde. Si la source n'a rien
-        // de plus que les bougies déjà chargées, on agrège localement : la
-        // demande de l'utilisateur est légitime, la refuser ne l'est pas.
-        if (returningToDaily && (await restoreDailyHistory(timeframe, replayCutEpoch))) {
-          return;
-        }
-
-        // Imported files and upward aggregation never touch `baseCandles`: the
-        // pristine resolution stays, `displayCandles` is what gets rolled up.
-        market.setTimeframe(timeframe.s);
-
-        const aggregated = useMarketStore.getState().displayCandles.length;
-        showToast(
-          replay.isActive
-            ? `Unité de temps : ${timeframe.label}. Quittez le replay pour tout réafficher.`
-            : `Unité de temps : ${timeframe.label} · ${aggregated.toLocaleString('fr-FR')} bougies`,
-          'info',
-          replay.isActive ? 3000 : 2000
-        );
         return;
       }
 
-      // ── 3. Finer than the loaded data: only an online pair can supply it. ──
-      if (!isMarketPair) {
+      // ── 2. Fichiers importés (CSV) : pas de fournisseur en ligne, agrégation locale uniquement. ──
+      if (isImported) {
         closeAllDropdowns();
+        if (timeframe.s >= baseTF) {
+          market.setTimeframe(timeframe.s);
+          const aggregated = useMarketStore.getState().displayCandles.length;
+          showToast(
+            replay.isActive
+              ? `Unité de temps : ${timeframe.label}. Quittez le replay pour tout réafficher.`
+              : `Unité de temps : ${timeframe.label} · ${aggregated.toLocaleString('fr-FR')} bougies`,
+            'info',
+            replay.isActive ? 3000 : 2000
+          );
+          return;
+        }
+
+        // Plus fin que la résolution du fichier importé : impossible.
         if (replayCutEpoch !== null) {
           useUIStore.getState().setTimeframeCoverage(
             describeCoverage({
@@ -148,7 +139,6 @@ export function useTimeframeSwitch(): TimeframeSwitch {
           );
           return;
         }
-        // Hors replay il n'y a pas de position à situer : une phrase suffit.
         showToast(
           `${timeframe.label} indisponible : le fichier ${currentSymbol} est en ${currentBaseLabel}. On ne peut pas descendre sous sa résolution.`,
           'warning',
@@ -157,20 +147,79 @@ export function useTimeframeSwitch(): TimeframeSwitch {
         return;
       }
 
-      // ── 4. Le fournisseur sert-il cette granularité aussi loin ? ──
-      // Ce contrôle ne concerne que le téléchargement. Placé en tête, il
-      // refusait aussi l'agrégation locale : demander le 15 min sur un fichier
-      // 1 min déjà chargé ne demande pourtant aucun réseau, et se faisait
-      // pourtant rejeter dès que le replay était parti loin dans le passé.
+      // ── 3. Paires en ligne inconnues du catalogue : repli local si possible. ──
+      if (!isMarketPair) {
+        closeAllDropdowns();
+        if (timeframe.s >= baseTF) {
+          market.setTimeframe(timeframe.s);
+          return;
+        }
+        showToast(`${timeframe.label} indisponible pour ${currentSymbol}.`, 'warning', 4000);
+        return;
+      }
+
+      // ── 4. Unités journalières et supérieures (1D, 1W, 1M). ──
+      if (timeframe.s >= TimeframeSeconds.D1) {
+        closeAllDropdowns();
+        if (baseTF < TimeframeSeconds.D1) {
+          // On passe d'un timeframe intraday à l'archive journalière profonde.
+          if (await restoreDailyHistory(timeframe, replayCutEpoch)) {
+            return;
+          }
+          // Si le téléchargement journalier n'a rien rapporté de plus, repli sur l'agrégation locale.
+          if (timeframe.s >= baseTF) {
+            market.setTimeframe(timeframe.s);
+            return;
+          }
+        } else {
+          // Déjà en base journalière : mise à l'échelle (ex: 1D -> 1W).
+          market.setTimeframe(timeframe.s);
+          return;
+        }
+      }
+
+      // ── 5. Unités intraday natives de même base déjà en mémoire (ex: H1 -> H4 ou H2). ──
+      if (
+        (baseTF === TimeframeSeconds.H1 && (timeframe.s === TimeframeSeconds.H2 || timeframe.s === TimeframeSeconds.H4)) ||
+        (baseTF === TimeframeSeconds.M1 && timeframe.s === TimeframeSeconds.M3)
+      ) {
+        closeAllDropdowns();
+        market.setTimeframe(timeframe.s);
+        const aggregated = useMarketStore.getState().displayCandles.length;
+        showToast(
+          replay.isActive
+            ? `Unité de temps : ${timeframe.label}. Quittez le replay pour tout réafficher.`
+            : `Unité de temps : ${timeframe.label} · ${aggregated.toLocaleString('fr-FR')} bougies`,
+          'info',
+          replay.isActive ? 3000 : 2000
+        );
+        return;
+      }
+
+      // ── 6. Téléchargement réel du timeframe demandé (ex: de 1m à 5m, 15m, 30m, 1h, 4h, etc.). ──
+      // On télécharge les données réelles du timeframe auprès du fournisseur
+      // pour bénéficier de toute la profondeur d'archive et du vrai OHLC/volume,
+      // au lieu de juste reconstituer les quelques bougies d'un timeframe inférieur.
       const archive = checkArchiveDepth(timeframe.s, replayCutEpoch);
       if (!archive.allowed) {
         closeAllDropdowns();
+        // Si les archives distantes ne descendent pas assez loin pour le replay, mais qu'on a déjà
+        // des bougies locales couvrant ce moment et qu'on monte en granularité :
+        if (timeframe.s >= baseTF) {
+          market.setTimeframe(timeframe.s);
+          const aggregated = useMarketStore.getState().displayCandles.length;
+          showToast(
+            `${archive.message ?? 'Archives distantes insuffisantes.'} Repli sur l'agrégation locale (${aggregated.toLocaleString('fr-FR')} bougies).`,
+            'info',
+            5000
+          );
+          return;
+        }
+
         if (replayCutEpoch === null) {
           showToast(archive.message ?? 'Profondeur d’archive insuffisante.', 'warning', 6000);
           return;
         }
-        // Un diagnostic, pas un toast : l'utilisateur doit pouvoir lire d'où
-        // vient le refus et ce qu'il peut faire, sans course contre la montre.
         useUIStore.getState().setTimeframeCoverage(
           describeCoverage({
             cause: 'archive-depth',
@@ -186,12 +235,19 @@ export function useTimeframeSwitch(): TimeframeSwitch {
 
       closeAllDropdowns();
       const generation = ++ownDownloadRef.current;
-      await downloadTimeframe(timeframe, replayCutEpoch, activeTF, setDownloadingSafely);
-      // Le contrôleur est partagé entre instances (barre du haut, diagnostic) :
-      // annulé par l'autre, ce téléchargement ne passait jamais par le chemin
-      // qui éteint l'indicateur, resté « Chargement… » indéfiniment. Chaque
-      // instance éteint le sien, sauf si elle a elle-même relancé depuis.
+      const downloadSuccess = await downloadTimeframe(timeframe, replayCutEpoch, activeTF, setDownloadingSafely);
       if (ownDownloadRef.current === generation) setDownloadingSafely(null);
+
+      // Si le téléchargement échoue mais qu'on peut agréger en local :
+      if (!downloadSuccess && timeframe.s >= baseTF) {
+        market.setTimeframe(timeframe.s);
+        const aggregated = useMarketStore.getState().displayCandles.length;
+        showToast(
+          `Téléchargement ${timeframe.label} non abouti. Repli sur l'agrégation locale (${aggregated.toLocaleString('fr-FR')} bougies).`,
+          'info',
+          4000
+        );
+      }
     },
     // Every dependency is read through `getState()` at call time, so the
     // callback identity stays stable across renders.
@@ -290,7 +346,7 @@ async function downloadTimeframe(
   replayCutEpoch: number | null,
   currentBaseSeconds: number,
   setDownloading: (label: string | null) => void
-): Promise<void> {
+): Promise<boolean> {
     const { showToast } = useUIStore.getState();
     const symbol = useMarketStore.getState().currentSymbol;
     const interval = intervalLabelFor(timeframe.s);
@@ -319,7 +375,7 @@ async function downloadTimeframe(
       });
 
       // Une demande plus récente a pris la main : sa réponse fait foi.
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return false;
 
       const { candles } = series;
       if (candles.length === 0) {
@@ -329,7 +385,7 @@ async function downloadTimeframe(
           'warning',
           5000
         );
-        return;
+        return false;
       }
 
       const detectedTF = detectBaseTF(candles);
@@ -344,7 +400,7 @@ async function downloadTimeframe(
           'success',
           4000
         );
-        return;
+        return true;
       }
 
       // ── Replay is running: the new series must actually cover the cut. ──
@@ -363,7 +419,7 @@ async function downloadTimeframe(
             contextBars: coverage.contextBars,
           })
         );
-        return;
+        return false;
       }
 
       useMarketStore.getState().setBaseCandles(candles, detectedTF);
@@ -382,12 +438,14 @@ async function downloadTimeframe(
         'success',
         3500
       );
+      return true;
     } catch (error) {
       // Une annulation n'est pas une panne : elle vient d'un clic plus récent,
       // qui affiche déjà son propre message.
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return false;
       console.warn('[Topbar] timeframe download failed:', error);
       showToast(`Erreur lors du téléchargement en ${timeframe.label}`, 'error', 3000);
+      return false;
     } finally {
       endDownload(controller);
       // Ne pas éteindre l'indicateur d'une demande qui, elle, tourne encore.
