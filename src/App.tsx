@@ -123,8 +123,11 @@ export const App: React.FC = () => {
       // A provider cache holding closes only (the old ECB-first daily forex)
       // must not come back: reload that instrument with real wicks instead.
       if (dataset.source !== 'import' && isClosesOnlySeries(dataset.data)) {
-        await loadDefaultDataset(saved.currentSymbol);
-        return true;
+        const loaded = await loadDefaultDataset(saved.currentSymbol);
+        if (loaded) {
+          useMarketStore.getState().setChartType(saved.chartType);
+          return true;
+        }
       }
 
       const market = useMarketStore.getState();
@@ -158,13 +161,14 @@ export const App: React.FC = () => {
       return true;
     }
 
-    async function loadDefaultDataset(symbol = 'EURUSD'): Promise<void> {
+    async function loadDefaultDataset(symbol = 'EURUSD'): Promise<boolean> {
       const series = await fetchHistoricalSeries({ symbol, interval: '1d', range: 'max' });
-      if (!series.candles.length) return;
+      if (!series.candles.length) return false;
 
       const market = useMarketStore.getState();
       market.setSymbol(symbol);
       market.setBaseCandles(series.candles);
+      market.setChartType('Candlestick');
       market.setDataSource(`Données réelles · ${PROVENANCE_LABELS[series.provenance]}`, series.isSimulated);
 
       // Say which it is. The loader used to announce "bougies réelles" even when
@@ -177,6 +181,7 @@ export const App: React.FC = () => {
         series.isSimulated ? 'warning' : 'success',
         series.isSimulated ? 8000 : 3500
       );
+      return true;
     }
 
     // A single catch around both paths: the previous version awaited an unguarded

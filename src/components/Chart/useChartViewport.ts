@@ -399,6 +399,16 @@ export function useChartViewport(chart: IChartApi | null): ChartViewport {
           return;
         }
 
+        if (barsInWindow > 250) {
+          // Too dense to be readable (e.g. jumping from 1D down to 1m or 5m):
+          // cramming thousands of bars makes candles hair-thin and invisible.
+          // Show a readable tail around the anchor / last candle instead.
+          const anchor = lastIndex === -1 ? count : lastIndex;
+          const to_ = Math.min(count + RIGHT_MARGIN_BARS, anchor + RIGHT_MARGIN_BARS);
+          setLogicalRange(chart, Math.max(0, to_ - DEFAULT_VISIBLE_BARS), to_);
+          return;
+        }
+
         try {
           chart.timeScale().setVisibleRange({
             from: clamp(from, firstTime, lastTime) as UTCTimestamp,

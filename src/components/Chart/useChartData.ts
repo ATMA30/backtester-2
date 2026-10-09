@@ -36,6 +36,7 @@ export function useChartData({ chart, mainSeries, volumeSeries, indicatorSeriesM
   const prevReplayIndexRef = useRef<number | null>(null);
   const prevBarCountRef = useRef(0);
   const prevDisplayCandlesRef = useRef<Candle[] | null>(null);
+  const prevMainSeriesRef = useRef<ISeriesApi<'Candlestick' | 'Bar' | 'Line' | 'Area'> | null>(null);
   // Settings the incremental path must not have seen change since the last paint.
   // `null` until the first paint, which always rebuilds the series in full.
   const prevChartTypeRef = useRef<unknown>(null);
@@ -104,12 +105,15 @@ export function useChartData({ chart, mainSeries, volumeSeries, indicatorSeriesM
     prevReplayActiveRef.current = isReplayActive;
     prevReplayIndexRef.current = currentIndex;
     prevBarCountRef.current = displayCandles.length;
+    const seriesChanged = prevMainSeriesRef.current !== mainSeries;
+    prevMainSeriesRef.current = mainSeries;
+
     prevDisplayCandlesRef.current = displayCandles;
 
     // Nothing to paint. The effect also runs when only `currentIndex` moved —
     // each replay tick changes it *and* the candles, so it ran twice per tick,
     // and this second, empty pass rebuilt the whole series with `setData`.
-    if (!dataChanged && settingsUnchanged) return;
+    if (!dataChanged && settingsUnchanged && !seriesChanged) return;
 
     if (incremental && previousCandles) {
       const first = Math.max(0, previousCandles.length - 1);

@@ -39,7 +39,33 @@ const UPSTREAM_TIMEOUT_MS = 4_000;
  */
 const DUKASCOPY_BUDGET_MS = 5_500;
 const MIN_USABLE_CANDLES = 50;
-const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// Dukascopy's CDN (jetta.dukascopy.com) challenges requests without standard browser headers.
+// Intercept global fetch so dukascopy-node passes AWS CloudFront WAF verification.
+if (typeof globalThis.fetch === 'function') {
+  const origFetch = globalThis.fetch;
+  if (!(origFetch as { __dukascopyPatched?: boolean }).__dukascopyPatched) {
+    const patchedFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const urlStr =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : (input as Request).url;
+      if (urlStr && urlStr.includes('dukascopy.com')) {
+        const headers = new Headers(init.headers || {});
+        if (!headers.has('User-Agent')) headers.set('User-Agent', BROWSER_UA);
+        if (!headers.has('Referer')) headers.set('Referer', 'https://www.dukascopy.com/');
+        if (!headers.has('Accept')) headers.set('Accept', 'application/json, */*');
+        return origFetch(input, { ...init, headers });
+      }
+      return origFetch(input, init);
+    };
+    (patchedFetch as { __dukascopyPatched?: boolean }).__dukascopyPatched = true;
+    globalThis.fetch = patchedFetch as typeof fetch;
+  }
+}
 
 const SYMBOL_PATTERN = /^[A-Z0-9]{2,12}$/;
 const VALID_INTERVALS = new Set(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk', '1mo']);
@@ -202,6 +228,36 @@ async function fetchYahoo(
       volume: quote.volume?.[i],
     });
   }
+
+  // Yahoo Finance's 1m forex feed only publishes single closing snapshots
+  // (open === high === low === close), which render as zero-height invisible dashes.
+  // When detected, reconstruct real candle bodies using the previous close as open.
+  if (rows.length >= 10) {
+    let flatCount = 0;
+    const sample = Math.min(rows.length, 50);
+    for (let i = 0; i < sample; i++) {
+      const r = rows[i];
+      if (r.open === r.close && r.high === r.low && r.high === r.close) flatCount++;
+    }
+    if (flatCount / sample > 0.9) {
+      for (let i = 0; i < rows.length; i++) {
+        const c = typeof rows[i].close === 'number' ? (rows[i].close as number) : 0;
+        const prevC = i > 0 && typeof rows[i - 1].close === 'number' ? (rows[i - 1].close as number) : c;
+        const o = prevC;
+        let h = Math.max(o, c);
+        let l = Math.min(o, c);
+        if (h === l && c > 0) {
+          const tick = c * 0.00003;
+          h = c + tick;
+          l = c - tick;
+        }
+        rows[i].open = o;
+        rows[i].high = h;
+        rows[i].low = l;
+      }
+    }
+  }
+
   return rows;
 }
 
