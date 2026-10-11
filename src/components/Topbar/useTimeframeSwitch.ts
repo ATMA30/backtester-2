@@ -237,7 +237,7 @@ export function useTimeframeSwitch(): TimeframeSwitch {
         targetBaseTF,
         downloadInterval,
         replayCutEpoch,
-        activeTF,
+        baseTF,
         setDownloadingSafely
       );
       if (ownDownloadRef.current === generation) setDownloadingSafely(null);
@@ -384,12 +384,18 @@ async function downloadTimeframe(
 
       const { candles } = series;
       if (candles.length === 0) {
-        const tried = series.attempted.map((a) => PROVENANCE_LABELS[a]).join(', ') || 'aucune';
-        showToast(
-          `${timeframe.label} indisponible pour ${symbol}. Sources essayées : ${tried}.`,
-          'warning',
-          5000
-        );
+        // Si le timeframe demandé est inférieur à la base locale (ex: base 5m et demande 1m),
+        // l'agrégation locale est impossible : on affiche l'alerte d'indisponibilité.
+        // Si timeframe.s >= currentBaseSeconds, l'appelant va agréger localement
+        // sans encombre : on évite d'alarmer l'utilisateur avec un faux positif.
+        if (timeframe.s < currentBaseSeconds) {
+          const tried = series.attempted.map((a) => PROVENANCE_LABELS[a]).join(', ') || 'aucune';
+          showToast(
+            `${timeframe.label} indisponible pour ${symbol}. Sources essayées : ${tried}.`,
+            'warning',
+            5000
+          );
+        }
         return false;
       }
 
@@ -450,7 +456,9 @@ async function downloadTimeframe(
       // qui affiche déjà son propre message.
       if (controller.signal.aborted) return false;
       console.warn('[Topbar] timeframe download failed:', error);
-      showToast(`Erreur lors du téléchargement en ${timeframe.label}`, 'error', 3000);
+      if (timeframe.s < currentBaseSeconds) {
+        showToast(`Erreur lors du téléchargement en ${timeframe.label}`, 'error', 3000);
+      }
       return false;
     } finally {
       endDownload(controller);

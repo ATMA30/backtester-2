@@ -35,10 +35,10 @@ import { TimeframeSeconds } from '../../src/domain/timeframes';
 const UPSTREAM_TIMEOUT_MS = 4_000;
 /**
  * Budget for the Dukascopy download. A synchronous Netlify function is cut at
- * 10 s: 5.5 s here plus Yahoo's 4 s fallback stays under it. Past the budget
- * the request falls through to Yahoo instead of timing the whole call out.
+ * 10 s: 8 s here gives ample time for 36 monthly files (3 years of 1h data)
+ * without cutting off under minor network jitter.
  */
-const DUKASCOPY_BUDGET_MS = 5_500;
+const DUKASCOPY_BUDGET_MS = 8_000;
 const MIN_USABLE_CANDLES = 50;
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
