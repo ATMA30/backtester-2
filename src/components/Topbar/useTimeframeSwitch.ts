@@ -7,7 +7,7 @@ import { fetchHistoricalSeries, PROVENANCE_LABELS } from '../../services/histori
 import { checkArchiveDepth } from '../../domain/archive-limits';
 import { describeCoverage } from '../../domain/timeframe-coverage';
 import { indexAtOrAfter } from '../../domain/candles';
-import { TIMEFRAME_DEFS, TimeframeSeconds, intervalLabelFor } from '../../domain/timeframes';
+import { TIMEFRAME_DEFS, TimeframeSeconds, intervalLabelFor, getDownloadableBaseTF } from '../../domain/timeframes';
 
 /**
  * Timeframe switching, extracted from a 230-line async closure that lived
@@ -103,8 +103,8 @@ export function useTimeframeSwitch(): TimeframeSwitch {
 
       const currentBaseLabel = TIMEFRAME_DEFS.find((d) => d.s === baseTF)?.label ?? '1D';
 
-      // ── 1. Même granularité déjà active et chargée : rien à faire. ──
-      if (timeframe.s === activeTF && timeframe.s === baseTF) {
+      // ── 1. Même granularité déjà active et affichée : rien à faire. ──
+      if (timeframe.s === activeTF) {
         closeAllDropdowns();
         return;
       }
@@ -158,8 +158,26 @@ export function useTimeframeSwitch(): TimeframeSwitch {
         return;
       }
 
-      // ── 4. Unités journalières et supérieures (1D, 1W, 1M). ──
-      if (timeframe.s >= TimeframeSeconds.D1) {
+      const { baseSeconds: targetBaseTF, interval: downloadInterval } = getDownloadableBaseTF(timeframe.s);
+
+      // ── 4. Même base native déjà en mémoire : agrégation immédiate sans requête réseau. ──
+      // Par exemple : base H1 en mémoire, passage en 2h ou 4h, ou base D1 vers 1W / 1M.
+      if (baseTF === targetBaseTF) {
+        closeAllDropdowns();
+        market.setTimeframe(timeframe.s);
+        const aggregated = useMarketStore.getState().displayCandles.length;
+        showToast(
+          replay.isActive
+            ? `Unité de temps : ${timeframe.label}. Quittez le replay pour tout réafficher.`
+            : `Unité de temps : ${timeframe.label} · ${aggregated.toLocaleString('fr-FR')} bougies`,
+          'info',
+          replay.isActive ? 3000 : 2000
+        );
+        return;
+      }
+
+      // ── 5. Unités journalières et supérieures (1D, 1W, 1M). ──
+      if (targetBaseTF >= TimeframeSeconds.D1) {
         closeAllDropdowns();
         if (baseTF < TimeframeSeconds.D1) {
           // On passe d'un timeframe intraday à l'archive journalière profonde.
@@ -178,28 +196,7 @@ export function useTimeframeSwitch(): TimeframeSwitch {
         }
       }
 
-      // ── 5. Unités intraday natives de même base déjà en mémoire (ex: H1 -> H4 ou H2). ──
-      if (
-        (baseTF === TimeframeSeconds.H1 && (timeframe.s === TimeframeSeconds.H2 || timeframe.s === TimeframeSeconds.H4)) ||
-        (baseTF === TimeframeSeconds.M1 && timeframe.s === TimeframeSeconds.M3)
-      ) {
-        closeAllDropdowns();
-        market.setTimeframe(timeframe.s);
-        const aggregated = useMarketStore.getState().displayCandles.length;
-        showToast(
-          replay.isActive
-            ? `Unité de temps : ${timeframe.label}. Quittez le replay pour tout réafficher.`
-            : `Unité de temps : ${timeframe.label} · ${aggregated.toLocaleString('fr-FR')} bougies`,
-          'info',
-          replay.isActive ? 3000 : 2000
-        );
-        return;
-      }
-
-      // ── 6. Téléchargement réel du timeframe demandé (ex: de 1m à 5m, 15m, 30m, 1h, 4h, etc.). ──
-      // On télécharge les données réelles du timeframe auprès du fournisseur
-      // pour bénéficier de toute la profondeur d'archive et du vrai OHLC/volume,
-      // au lieu de juste reconstituer les quelques bougies d'un timeframe inférieur.
+      // ── 6. Téléchargement réel du timeframe demandé auprès du fournisseur. ──
       const archive = checkArchiveDepth(timeframe.s, replayCutEpoch);
       if (!archive.allowed) {
         closeAllDropdowns();
@@ -235,7 +232,14 @@ export function useTimeframeSwitch(): TimeframeSwitch {
 
       closeAllDropdowns();
       const generation = ++ownDownloadRef.current;
-      const downloadSuccess = await downloadTimeframe(timeframe, replayCutEpoch, activeTF, setDownloadingSafely);
+      const downloadSuccess = await downloadTimeframe(
+        timeframe,
+        targetBaseTF,
+        downloadInterval,
+        replayCutEpoch,
+        activeTF,
+        setDownloadingSafely
+      );
       if (ownDownloadRef.current === generation) setDownloadingSafely(null);
 
       // Si le téléchargement échoue mais qu'on peut agréger en local :
@@ -243,9 +247,9 @@ export function useTimeframeSwitch(): TimeframeSwitch {
         market.setTimeframe(timeframe.s);
         const aggregated = useMarketStore.getState().displayCandles.length;
         showToast(
-          `Téléchargement ${timeframe.label} non abouti. Repli sur l'agrégation locale (${aggregated.toLocaleString('fr-FR')} bougies).`,
+          `Unité de temps : ${timeframe.label} · Agrégation locale (${aggregated.toLocaleString('fr-FR')} bougies).`,
           'info',
-          4000
+          3000
         );
       }
     },
@@ -343,13 +347,14 @@ async function restoreDailyHistory(
 /** Download a finer series, anchored on the replay cut when there is one. */
 async function downloadTimeframe(
   timeframe: TimeframeDef,
+  targetBaseTF: number,
+  downloadInterval: string,
   replayCutEpoch: number | null,
   currentBaseSeconds: number,
   setDownloading: (label: string | null) => void
 ): Promise<boolean> {
     const { showToast } = useUIStore.getState();
     const symbol = useMarketStore.getState().currentSymbol;
-    const interval = intervalLabelFor(timeframe.s);
 
     const controller = beginExclusiveDownload();
 
@@ -365,7 +370,7 @@ async function downloadTimeframe(
     try {
       const series = await fetchHistoricalSeries({
         symbol,
-        interval,
+        interval: downloadInterval,
         range: 'max',
         targetTimestamp: replayCutEpoch ?? undefined,
         // A timeframe switch must fail visibly rather than swap real history
@@ -389,14 +394,15 @@ async function downloadTimeframe(
       }
 
       const detectedTF = detectBaseTF(candles);
-      const effectiveTF = Math.max(timeframe.s, detectedTF);
+      const effectiveBaseTF = detectedTF > 0 ? detectedTF : targetBaseTF;
 
       if (replayCutEpoch === null) {
-        useMarketStore.getState().setBaseCandles(candles, detectedTF);
-        useMarketStore.getState().setTimeframe(effectiveTF);
+        useMarketStore.getState().setBaseCandles(candles, effectiveBaseTF);
+        useMarketStore.getState().setTimeframe(timeframe.s);
         useMarketStore.getState().setDataSource(`Données réelles · ${PROVENANCE_LABELS[series.provenance]}`, false);
+        const displayCount = useMarketStore.getState().displayCandles.length;
         showToast(
-          `${symbol} en ${timeframe.label} · ${candles.length.toLocaleString('fr-FR')} bougies · ${PROVENANCE_LABELS[series.provenance]}`,
+          `${symbol} en ${timeframe.label} · ${displayCount.toLocaleString('fr-FR')} bougies · ${PROVENANCE_LABELS[series.provenance]}`,
           'success',
           4000
         );
@@ -422,8 +428,8 @@ async function downloadTimeframe(
         return false;
       }
 
-      useMarketStore.getState().setBaseCandles(candles, detectedTF);
-      useMarketStore.getState().setTimeframe(effectiveTF);
+      useMarketStore.getState().setBaseCandles(candles, effectiveBaseTF);
+      useMarketStore.getState().setTimeframe(timeframe.s);
       useMarketStore.getState().setDataSource(`Données réelles · ${PROVENANCE_LABELS[series.provenance]}`, false);
       useReplayStore.setState({
         isActive: true,

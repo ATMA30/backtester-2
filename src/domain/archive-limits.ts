@@ -24,10 +24,12 @@ import { TimeframeSeconds } from './timeframes';
  */
 export const DUKASCOPY_SPAN_DAYS: Readonly<Record<string, number>> = {
   '1m': 30,
+  '3m': 30,
   '5m': 60,
   '15m': 120,
   '30m': 180,
   '1h': 1_095,
+  '2h': 1_095,
   '4h': 1_095,
 };
 

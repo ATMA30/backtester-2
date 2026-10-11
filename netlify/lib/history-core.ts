@@ -27,9 +27,10 @@
  */
 
 import { getHistoricalRates } from 'dukascopy-node';
-import { mergeWeekendDailyCandles, sanitizeCandles, RawCandleLike } from '../../src/domain/candles';
+import { aggregateCandles, mergeWeekendDailyCandles, sanitizeCandles, RawCandleLike } from '../../src/domain/candles';
 import { DUKASCOPY_DAILY_FROM, DUKASCOPY_SPAN_DAYS } from '../../src/domain/archive-limits';
 import { HISTORY_API_VERSION } from '../../src/domain/history-api';
+import { TimeframeSeconds } from '../../src/domain/timeframes';
 
 const UPSTREAM_TIMEOUT_MS = 4_000;
 /**
@@ -68,9 +69,9 @@ if (typeof globalThis.fetch === 'function') {
 }
 
 const SYMBOL_PATTERN = /^[A-Z0-9]{2,12}$/;
-const VALID_INTERVALS = new Set(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk', '1mo']);
+const VALID_INTERVALS = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d', '1w', '1wk', '1mo']);
 const VALID_RANGES = new Set(['1y', '2y', '5y', '10y', 'max']);
-const DAILY_INTERVALS = new Set(['1d', '1wk', '1mo']);
+const DAILY_INTERVALS = new Set(['1d', '1w', '1wk', '1mo']);
 
 export const FOREX_PAIRS: ReadonlySet<string> = new Set([
   'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
@@ -159,15 +160,18 @@ function yahooSymbolFor(symbol: string): string {
 
 /** Clamp interval/range to what Yahoo actually serves for that granularity. */
 function yahooWindow(interval: string, range: string): { interval: string; range: string } {
-  if (interval === '1h' || interval === '4h') {
+  if (interval === '1h' || interval === '2h' || interval === '4h') {
     return { interval: '60m', range: ['5y', '10y', 'max'].includes(range) ? '2y' : range };
   }
-  if (['1m', '5m', '15m', '30m'].includes(interval)) {
+  if (['1m', '3m', '5m', '15m', '30m'].includes(interval)) {
     const capped = ['1y', '2y', '5y', '10y', 'max'].includes(range);
-    return { interval, range: capped ? (interval === '1m' ? '7d' : '60d') : range };
+    return {
+      interval: interval === '3m' ? '1m' : interval,
+      range: capped ? (['1m', '3m'].includes(interval) ? '7d' : '60d') : range,
+    };
   }
   if (DAILY_INTERVALS.has(interval)) {
-    return { interval, range: range === 'max' ? '10y' : range };
+    return { interval: interval === '1w' ? '1wk' : interval, range: range === 'max' ? '10y' : range };
   }
   return { interval, range };
 }
@@ -337,13 +341,17 @@ export function extendWithEcbCloses(real: RawCandleLike[], ecb: RawCandleLike[])
 
 const DUKASCOPY_TIMEFRAME: Readonly<Record<string, string>> = {
   '1m': 'm1',
+  '3m': 'm1',
   '5m': 'm5',
   '15m': 'm15',
   '30m': 'm30',
-  // 4h is rebuilt client-side from 1h, like every other source.
   '1h': 'h1',
+  '2h': 'h1',
   '4h': 'h1',
   '1d': 'd1',
+  '1w': 'd1',
+  '1wk': 'd1',
+  '1mo': 'd1',
 };
 
 /** Dukascopy instrument id for a symbol, or null when it does not list it. */
@@ -562,9 +570,21 @@ export async function handleHistoryRequest(request: Request, options: HistoryOpt
   // Shared with the client instead of a third private copy: the two previous
   // implementations had already diverged on NaN handling.
   const sanitized = sanitizeCandles(rows);
+  let processed = sanitized;
+  if (interval === '2h') {
+    processed = aggregateCandles(sanitized, TimeframeSeconds.H2, TimeframeSeconds.H1);
+  } else if (interval === '4h') {
+    processed = aggregateCandles(sanitized, TimeframeSeconds.H4, TimeframeSeconds.H1);
+  } else if (interval === '3m') {
+    processed = aggregateCandles(sanitized, TimeframeSeconds.M3, TimeframeSeconds.M1);
+  } else if (interval === '1w' || interval === '1wk') {
+    processed = aggregateCandles(sanitized, TimeframeSeconds.W1, TimeframeSeconds.D1);
+  } else if (interval === '1mo') {
+    processed = aggregateCandles(sanitized, TimeframeSeconds.MN1, TimeframeSeconds.D1);
+  }
   // Markets closed at the weekend: Dukascopy's short Sunday session becomes
   // part of Monday, as on TradingView. Crypto trades seven days a week.
-  const candles = interval === '1d' && !symbol.endsWith('USDT') ? mergeWeekendDailyCandles(sanitized) : sanitized;
+  const candles = interval === '1d' && !symbol.endsWith('USDT') ? mergeWeekendDailyCandles(processed) : processed;
 
   // One structured line per request: filter the function logs on `[history]`
   // and count `source` / `dukascopy` to see how often the fallback serves.
