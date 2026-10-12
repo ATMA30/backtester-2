@@ -266,7 +266,9 @@ async function fetchDeriv(
   const endEpoch = targetTimestamp
     ? Math.min(Math.floor(Date.now() / 1000), targetTimestamp + Math.floor(targetCount * 0.3) * granularity)
     : undefined;
-  return fetchDerivMultiYear(symbol, granularity, targetCount, endEpoch, ctx.signal);
+  const instrument = getInstrument(symbol);
+  const derivSymbol = instrument.derivSymbol ?? symbol;
+  return fetchDerivMultiYear(derivSymbol, granularity, targetCount, endEpoch, ctx.signal);
 }
 
 // ── SIMULATION (explicitly labelled) ──────────────────────────

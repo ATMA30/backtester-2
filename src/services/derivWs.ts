@@ -9,6 +9,8 @@ import { sanitizeCandles } from '../domain/candles';
  * named constant rather than inline in a URL.
  */
 const DERIV_WS_ENDPOINTS = [
+  'wss://red.derivws.com/websockets/v3',
+  'wss://red.binaryws.com/websockets/v3',
   'wss://ws.derivws.com/websockets/v3',
   'wss://ws.binaryws.com/websockets/v3',
   'wss://frontend.binaryws.com/websockets/v3',
@@ -37,7 +39,7 @@ export function setDerivAppId(appId: string): void {
 }
 
 const CONNECT_TIMEOUT_MS = 6_000;
-const REQUEST_TIMEOUT_MS = 8_000;
+const REQUEST_TIMEOUT_MS = 15_000;
 /** Deriv caps `ticks_history` at 5000 candles per request. */
 const MAX_CANDLES_PER_REQUEST = 5_000;
 /** Hard ceiling on pagination, so a misbehaving feed cannot loop forever. */
