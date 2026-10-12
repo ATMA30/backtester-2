@@ -255,7 +255,7 @@ async function fetchHistoryApi(
   return { candles, provenance };
 }
 
-/** Deriv synthetics. */
+/** Deriv synthetics and real-market CFDs (forex, metals, indices). */
 async function fetchDeriv(
   symbol: string,
   granularity: number,
@@ -268,7 +268,26 @@ async function fetchDeriv(
     : undefined;
   const instrument = getInstrument(symbol);
   const derivSymbol = instrument.derivSymbol ?? symbol;
-  return fetchDerivMultiYear(derivSymbol, granularity, targetCount, endEpoch, ctx.signal);
+  const result = await fetchDerivMultiYear(derivSymbol, granularity, targetCount, endEpoch, ctx.signal);
+
+  // For daily forex, extend recent Deriv candles (which have real wicks)
+  // with historical ECB closes back to 1999 so the user gets deep history.
+  if (granularity >= TimeframeSeconds.D1 && instrument.assetClass === 'forex' && result.candles.length >= MIN_USABLE_CANDLES) {
+    try {
+      const ecb = await fetchFrankfurter(symbol, ctx);
+      if (ecb.length > 0) {
+        const firstDeriv = result.candles[0].time;
+        const older = ecb.filter((c) => c.time < firstDeriv);
+        if (older.length > 0) {
+          return { candles: [...older, ...result.candles], partial: result.partial, provenance: 'deriv' };
+        }
+      }
+    } catch {
+      // Silently keep Deriv candles if Frankfurter fails
+    }
+  }
+
+  return result;
 }
 
 // ── SIMULATION (explicitly labelled) ──────────────────────────
@@ -352,6 +371,7 @@ function providersFor(
   const instrument = getInstrument(symbol);
   const attempts: ProviderAttempt[] = [];
 
+  // 1. Synthetics: Deriv only
   if (instrument.assetClass === 'synthetic' || isSynthetic(symbol)) {
     attempts.push({
       provenance: 'deriv',
@@ -360,39 +380,42 @@ function providersFor(
     return attempts;
   }
 
+  // 2. Crypto: Binance client-side direct first (real OHLC wicks, fast, no CORS issues),
+  // fallback to history-api
+  if (instrument.assetClass === 'crypto' || symbol.endsWith('USDT')) {
+    attempts.push({
+      provenance: 'binance',
+      run: () => whole(fetchBinance(symbol, interval, targetCount, targetTimestamp, ctx)),
+    });
+    attempts.push({
+      provenance: 'history-api',
+      run: () => fetchHistoryApi(symbol, interval, range, targetTimestamp, ctx),
+    });
+    return attempts;
+  }
+
+  // 3. Primary provider for Forex, Metals, Indices, Oil: `/api/history`
+  // (serves Yahoo with real wicks for 10y daily and 2y intraday, plus Dukascopy & ECB extension)
   attempts.push({
     provenance: 'history-api',
     run: () => fetchHistoryApi(symbol, interval, range, targetTimestamp, ctx),
   });
 
-  switch (instrument.assetClass) {
-    case 'crypto':
-      attempts.push({
-        provenance: 'binance',
-        run: () => whole(fetchBinance(symbol, interval, targetCount, targetTimestamp, ctx)),
-      });
-      break;
+  // 4. Deriv fallback for instruments that have a Deriv symbol (Forex, Metals, Indices)
+  // Provides direct browser WebSocket connection with real OHLC wicks if /api/history is unreachable
+  if (instrument.derivSymbol) {
+    attempts.push({
+      provenance: 'deriv',
+      run: () => fetchDeriv(symbol, granularity, targetCount, targetTimestamp, ctx),
+    });
+  }
 
-    // Metals and indices: `/api/history` already runs Dukascopy, then Yahoo.
-    // The client used to retry Dukascopy through `/api/dukascopy`, a route
-    // that only ever existed on the dev server.
-
-    case 'forex': {
-      // The ECB series publishes closes only (no wicks) and ONLY at daily resolution (1d).
-      // It must NEVER be used as a fallback for intraday requests (1m, 5m, 1h...) as it would
-      // return daily candles and force the chart into 1D!
-      if (granularity >= TimeframeSeconds.D1) {
-        const frankfurter: ProviderAttempt = {
-          provenance: 'frankfurter',
-          run: () => whole(fetchFrankfurter(symbol, ctx)),
-        };
-        attempts.push(frankfurter);
-      }
-      break;
-    }
-
-    default:
-      break;
+  // 5. ECB/Frankfurter fallback for daily forex closes back to 1999
+  if (instrument.assetClass === 'forex' && granularity >= TimeframeSeconds.D1) {
+    attempts.push({
+      provenance: 'frankfurter',
+      run: () => whole(fetchFrankfurter(symbol, ctx)),
+    });
   }
 
   return attempts;

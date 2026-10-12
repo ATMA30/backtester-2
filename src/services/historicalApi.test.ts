@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchHistoricalSeries } from './historicalApi';
 
 /**
@@ -35,8 +35,24 @@ function hangs(init: { signal: AbortSignal }): Promise<Response> {
   });
 }
 
+class ClosedSocket {
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  constructor() {
+    queueMicrotask(() => this.onerror?.());
+  }
+  send() {}
+  close() {}
+}
+
+beforeEach(() => {
+  vi.stubGlobal('WebSocket', ClosedSocket);
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('fetchHistoricalSeries', () => {

@@ -35,12 +35,11 @@ import { TimeframeSeconds } from '../../src/domain/timeframes';
 const UPSTREAM_TIMEOUT_MS = 4_000;
 /**
  * Budget for the Dukascopy download. A synchronous Netlify function is cut at
- * 10 s: 8 s here gives ample time for 36 monthly files (3 years of 1h data)
- * without cutting off under minor network jitter.
+ * 10 s: 3 s gives ample time without delaying fallbacks under network challenge.
  */
-const DUKASCOPY_BUDGET_MS = 8_000;
+const DUKASCOPY_BUDGET_MS = 3_000;
 const MIN_USABLE_CANDLES = 50;
-const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
 // Dukascopy's CDN (jetta.dukascopy.com) challenges requests without standard browser headers.
 // Intercept global fetch so dukascopy-node passes AWS CloudFront WAF verification.
@@ -208,7 +207,12 @@ async function fetchYahoo(
         })
       : new URLSearchParams({ range: window.range, interval: window.interval });
   const path = encodeURIComponent(yahooSymbolFor(symbol));
-  const data = await fetchJson(`https://query1.finance.yahoo.com/v8/finance/chart/${path}?${params}`);
+  const hosts = ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com'];
+  let data: unknown = null;
+  for (const host of hosts) {
+    data = await fetchJson(`${host}/v8/finance/chart/${path}?${params}`);
+    if (data) break;
+  }
 
   const result = (
     data as { chart?: { result?: Array<{ timestamp?: number[]; indicators?: { quote?: Array<Record<string, Array<number | null>>> } }> } } | null
