@@ -1,7 +1,7 @@
 import { Candle } from '../types/market';
 import { fetchDerivMultiYear } from './derivWs';
 import { fetchJson, isAbortError, isTimeoutError } from './http';
-import { sanitizeCandles, RawCandleLike } from '../domain/candles';
+import { sanitizeCandles, isClosesOnlySeries, RawCandleLike } from '../domain/candles';
 import { getInstrument } from '../domain/instruments';
 import { TimeframeSeconds, secondsForInterval } from '../domain/timeframes';
 import { HISTORY_API_VERSION } from '../domain/history-api';
@@ -436,6 +436,7 @@ export async function fetchHistoricalSeries(request: HistoricalRequest): Promise
   const ctx: RequestContext = { signal, timeoutMs };
 
   const attempted: DataProvenance[] = [];
+  let closesOnlyCandidate: { candles: Candle[]; partial?: boolean; provenance?: DataProvenance } | null = null;
 
   for (const provider of providersFor({ symbol, interval, range, targetTimestamp }, ctx)) {
     if (signal?.aborted) break;
@@ -444,6 +445,14 @@ export async function fetchHistoricalSeries(request: HistoricalRequest): Promise
     try {
       const { candles, partial, provenance } = await provider.run();
       if (candles.length >= MIN_USABLE_CANDLES) {
+        // If the candidate dataset has closes only (no wicks, such as ECB reference rates),
+        // keep it as a fallback but continue trying remaining providers (e.g. Deriv) for real wicks.
+        if (isClosesOnlySeries(candles)) {
+          if (!closesOnlyCandidate) {
+            closesOnlyCandidate = { candles, partial, provenance: provenance ?? provider.provenance };
+          }
+          continue;
+        }
         return { candles, provenance: provenance ?? provider.provenance, isSimulated: false, attempted, partial };
       }
     } catch (error) {
@@ -453,6 +462,16 @@ export async function fetchHistoricalSeries(request: HistoricalRequest): Promise
       if (isCallerCancellation(error, signal)) throw error;
       console.warn(`[historicalApi] ${provider.provenance} failed for ${symbol}:`, error);
     }
+  }
+
+  if (closesOnlyCandidate) {
+    return {
+      candles: closesOnlyCandidate.candles,
+      provenance: closesOnlyCandidate.provenance ?? 'frankfurter',
+      isSimulated: false,
+      attempted,
+      partial: closesOnlyCandidate.partial,
+    };
   }
 
   if (!allowSimulated) {
