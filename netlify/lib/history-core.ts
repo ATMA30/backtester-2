@@ -266,6 +266,31 @@ async function fetchYahoo(
     }
   }
 
+  // Yahoo Finance daily forex feeds frequently record open === close while high/low
+  // have real intraday range. In lightweight-charts, open === close creates 0-height
+  // bodies (rendered as thin 1px green vertical crosses without candle bodies).
+  // Reconstruct open from the previous close so candles have real bodies and natural green/red colors.
+  let prevClose: number | null = null;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const c = typeof r.close === 'number' ? r.close : null;
+    let o = typeof r.open === 'number' ? r.open : null;
+    let h = typeof r.high === 'number' ? r.high : null;
+    let l = typeof r.low === 'number' ? r.low : null;
+
+    if (c !== null && o !== null) {
+      if (Math.abs(o - c) < 0.000001 && prevClose !== null) {
+        o = prevClose;
+        if (h !== null) h = Math.max(h, o, c);
+        if (l !== null) l = Math.min(l, o, c);
+        r.open = o;
+        r.high = h;
+        r.low = l;
+      }
+      prevClose = c;
+    }
+  }
+
   return rows;
 }
 
