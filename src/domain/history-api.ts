@@ -12,4 +12,4 @@
  * since `v` is part of the CDN cache key and `&v=<random>` bypassed the cache
  * at will — the very flood of provider requests that rounding `to` prevents.
  */
-export const HISTORY_API_VERSION = '7';
+export const HISTORY_API_VERSION = '8';
