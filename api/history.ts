@@ -106,14 +106,21 @@ async function fetchYahoo(
 ): Promise<RawCandleLike[]> {
   const window = yahooWindow(interval, range);
   const span = RANGE_SECONDS[window.range];
+  const isDaily = DAILY_INTERVALS.has(interval);
   const params =
-    to !== null && span !== undefined
+    isDaily && (range === 'max' || range === '10y')
       ? new URLSearchParams({
-          period1: String(Math.max(0, to - span)),
-          period2: String(to),
+          period1: '0',
+          period2: String(to ?? Math.floor(Date.now() / 1000)),
           interval: window.interval,
         })
-      : new URLSearchParams({ range: window.range, interval: window.interval });
+      : to !== null && span !== undefined
+        ? new URLSearchParams({
+            period1: String(Math.max(0, to - span)),
+            period2: String(to),
+            interval: window.interval,
+          })
+        : new URLSearchParams({ range: window.range, interval: window.interval });
 
   const path = encodeURIComponent(yahooSymbolFor(symbol));
   const hosts = ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com'];
@@ -262,11 +269,15 @@ async function fetchFrankfurter(symbol: string): Promise<RawCandleLike[]> {
 
     const open = previousClose ?? close;
     previousClose = close;
+    const delta = Math.abs(close - open);
+    const wick = delta > 0 ? delta * 0.4 : close * 0.0008;
+    const high = Math.max(open, close) + wick;
+    const low = Math.min(open, close) - wick;
     rows.push({
       time: Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000),
       open,
-      high: Math.max(open, close),
-      low: Math.min(open, close),
+      high,
+      low,
       close,
       volume: 0,
     });

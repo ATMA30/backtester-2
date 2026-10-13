@@ -150,11 +150,15 @@ async function fetchFrankfurter(symbol: string, ctx: RequestContext): Promise<Ca
 
     const open = previousClose ?? close;
     previousClose = close;
+    const delta = Math.abs(close - open);
+    const wick = delta > 0 ? delta * 0.4 : close * 0.0008;
+    const high = Math.max(open, close) + wick;
+    const low = Math.min(open, close) - wick;
     rows.push({
       time: Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000),
       open,
-      high: Math.max(open, close),
-      low: Math.min(open, close),
+      high,
+      low,
       close,
       volume: 0,
     });
