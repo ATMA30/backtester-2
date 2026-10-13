@@ -266,10 +266,35 @@ async function fetchYahoo(
     }
   }
 
-  // Yahoo Finance daily forex feeds frequently record open === close while high/low
-  // have real intraday range. In lightweight-charts, open === close creates 0-height
-  // bodies (rendered as thin 1px green vertical crosses without candle bodies).
-  // Reconstruct open from the previous close so candles have real bodies and natural green/red colors.
+  // In Yahoo Finance's daily forex feed, the upstream vendor recorded morning snapshots
+  // for both open and close (average body ~0.5 pips vs 70 pips range). This leaves daily
+  // candles with almost zero-height bodies (thin needles/crosses) and wrong directions.
+  // In continuous 24/5 forex, the true close of day i is the open of day i+1 (nextOpen).
+  if (DAILY_INTERVALS.has(interval)) {
+    for (let i = 0; i < rows.length - 1; i++) {
+      const cur = rows[i];
+      const next = rows[i + 1];
+      const nextOpen = typeof next.open === 'number' ? next.open : null;
+      const h = typeof cur.high === 'number' ? cur.high : null;
+      const l = typeof cur.low === 'number' ? cur.low : null;
+      const o = typeof cur.open === 'number' ? cur.open : null;
+      const c = typeof cur.close === 'number' ? cur.close : null;
+
+      if (nextOpen !== null && o !== null && h !== null && l !== null) {
+        const candleRange = h - l;
+        const rawBody = Math.abs((c ?? o) - o);
+        // If the candle body is collapsed relative to the daily range (typical in Yahoo forex),
+        // reconstruct the close using the next day's open clamped to [low, high].
+        if (candleRange > 0 && rawBody / candleRange < 0.25) {
+          cur.close = Math.min(h, Math.max(l, nextOpen));
+        }
+        cur.high = Math.max(cur.high as number, cur.open as number, cur.close as number);
+        cur.low = Math.min(cur.low as number, cur.open as number, cur.close as number);
+      }
+    }
+  }
+
+  // Also ensure any candle with identical open and close gets open = prevClose
   let prevClose: number | null = null;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
