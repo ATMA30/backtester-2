@@ -58,6 +58,48 @@ export function normalizeEpochSeconds(value: unknown): number | null {
 }
 
 /**
+ * Detect and repair inverted quote ticks and corrupt wick spikes.
+ *
+ * Upstream aggregators (particularly Yahoo Finance Forex) contain well-documented
+ * bad ticks where an inverted exchange rate (1 / price) was stored as high or low
+ * (e.g. GBPUSD on 2012-01-27 with low = 0.637389 when price was 1.57, or EURUSD on
+ * 2012-01-27 with low = 0.76057 when price was 1.316). Unchecked, these anomalies
+ * stretch the chart y-axis by thousands of pips and draw vertical needles.
+ */
+export function repairWickSpikes(
+  open: number,
+  high: number,
+  low: number,
+  close: number
+): { high: number; low: number } {
+  const bodyMax = Math.max(open, close);
+  const bodyMin = Math.min(open, close);
+  const bodyDelta = Math.abs(close - open);
+  const bodyRatio = bodyMax > 0 ? bodyDelta / bodyMax : 0;
+
+  // 1. Signature of Yahoo's inverted quote bug (e.g. 1 / 1.57 = 0.637)
+  const invertedLow = bodyMin > 0 && Math.abs(low * close - 1) < 0.05 && low < bodyMin * 0.75;
+  const invertedHigh = bodyMax > 0 && Math.abs(high * close - 1) < 0.05 && high > bodyMax * 1.25;
+
+  // 2. Extreme wick outlier where candle body didn't move (<8%) but wick extends >30% beyond the body
+  const extremeLow = bodyMin > 0 && (bodyMin - low) / bodyMin > 0.30 && bodyRatio < 0.08;
+  const extremeHigh = bodyMax > 0 && (high - bodyMax) / bodyMax > 0.30 && bodyRatio < 0.08;
+
+  // 3. Absurd drop where low is less than 50% of the body
+  const absurdLow = bodyMin > 0 && low < bodyMin * 0.50;
+
+  const repairedLow = invertedLow || extremeLow || absurdLow
+    ? bodyMin - Math.max(bodyDelta * 1.5, bodyMin * 0.005)
+    : low;
+
+  const repairedHigh = invertedHigh || extremeHigh
+    ? bodyMax + Math.max(bodyDelta * 1.5, bodyMax * 0.005)
+    : high;
+
+  return { high: repairedHigh, low: repairedLow };
+}
+
+/**
  * Validate, normalise, sort and deduplicate raw OHLC rows.
  *
  * Guarantees on the returned array — relied upon by the chart layer, which
@@ -65,6 +107,7 @@ export function normalizeEpochSeconds(value: unknown): number | null {
  *  - every numeric field is finite (no NaN, no Infinity);
  *  - `close` and `open` are strictly positive;
  *  - `high >= max(open, close)` and `low <= min(open, close)`;
+ *  - outlier wick spikes / inverted ticks from upstream feeds are repaired;
  *  - `volume` is a non-negative integer;
  *  - timestamps are whole seconds, strictly ascending and unique.
  *
@@ -92,8 +135,9 @@ export function sanitizeCandles(
 
     // A missing or inconsistent wick is clamped to the body rather than dropped:
     // the body is the trustworthy part of the record.
-    const high = Math.max(finite(row.high) ?? close, open, close);
-    const low = Math.min(finite(row.low) ?? close, open, close);
+    const rawHigh = Math.max(finite(row.high) ?? close, open, close);
+    const rawLow = Math.min(finite(row.low) ?? close, open, close);
+    const { high, low } = repairWickSpikes(open, rawHigh, rawLow, close);
 
     const volume = finite(row.volume) ?? 0;
 

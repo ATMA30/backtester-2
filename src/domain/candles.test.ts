@@ -88,6 +88,19 @@ describe('sanitizeCandles', () => {
     const [c] = sanitizeCandles([{ time: 1, open: 1, high: 1, low: 1, close: 1, volume: -50 }]);
     expect(c.volume).toBe(0);
   });
+
+  it('repairs inverted quote spikes and bad tick needles (e.g. 2012-01-27 Yahoo bug)', () => {
+    const [c] = sanitizeCandles([{
+      time: 1327622400,
+      open: 1.5675,
+      high: 1.5728,
+      low: 0.6374, // inverted 1/1.5689 quote tick
+      close: 1.5723,
+    }]);
+    expect(c.low).toBeGreaterThan(1.50);
+    expect(c.low).toBeLessThanOrEqual(c.open);
+    expect(c.high).toBe(1.5728);
+  });
 });
 
 describe('aggregateCandles', () => {
