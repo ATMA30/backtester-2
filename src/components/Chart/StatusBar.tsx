@@ -2,6 +2,9 @@ import React from 'react';
 import { Play } from 'lucide-react';
 import { useMarketStore } from '../../store/useMarketStore';
 import { useReplayStore } from '../../store/useReplayStore';
+import { useUIStore } from '../../store/useUIStore';
+import { deleteDataset } from '../../services/db';
+import { fetchHistoricalSeries, PROVENANCE_LABELS } from '../../services/historicalApi';
 
 /** Provenance first, then the candles shown and their range, and whether a replay runs. */
 export const StatusBar: React.FC = () => {
@@ -32,6 +35,22 @@ export const StatusBar: React.FC = () => {
       ? `Origine des bougies : ${dataSourceLabel}`
       : 'Origine des données inconnue';
 
+  const handleReloadLive = async () => {
+    const currentSymbol = useMarketStore.getState().currentSymbol;
+    try {
+      await deleteDataset(currentSymbol);
+      const series = await fetchHistoricalSeries({ symbol: currentSymbol, interval: '1d', range: 'max' });
+      if (series.candles.length) {
+        useMarketStore.getState().setBaseCandles(series.candles);
+        useMarketStore.getState().setDataSource(`Données réelles · ${PROVENANCE_LABELS[series.provenance]}`, series.isSimulated);
+        const count = series.candles.length.toLocaleString('fr-FR');
+        useUIStore.getState().showToast(`${currentSymbol} actualisé · ${count} bougies · ${PROVENANCE_LABELS[series.provenance]}`, 'success');
+      }
+    } catch (e) {
+      console.warn('[StatusBar] reload failed:', e);
+    }
+  };
+
   return (
     <div id="statusbar">
       <div className="status-item" title={provenanceTitle}>
@@ -40,6 +59,16 @@ export const StatusBar: React.FC = () => {
           id="status-dot"
         />
         <span id="status-text">{statusLabel}</span>
+        {statusLabel === 'Sauvegarde locale' && (
+          <button
+            type="button"
+            className="status-reload-action"
+            onClick={handleReloadLive}
+            title="Télécharger les dernières cotations en ligne avec mèches complètes"
+          >
+            Actualiser en ligne
+          </button>
+        )}
       </div>
       {displayCandles.length > 0 && (
         <>

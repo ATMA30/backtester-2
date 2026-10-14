@@ -290,17 +290,44 @@ export function seriesHasVolume(candles: readonly Candle[]): boolean {
  *
  * That is what the ECB publishes (one reference rate per day). Such series used
  * to be cached as the daily forex history, and a session restore would serve
- * them forever. Judged on the most recent candles, which a real feed always
- * gives wicks to; a handful of doji-like bars does not trip it.
+ * them forever. Checks both the tail and any block of 5+ consecutive glued bars
+ * anywhere across the series (impossible in continuous real market trading).
  */
 export function isClosesOnlySeries(candles: readonly Candle[], sample = 300): boolean {
+  if (candles.length < 20) return false;
+
+  // 1. Check if the tail is predominantly glued
   const tail = candles.slice(-sample);
-  if (tail.length < 20) return false;
-  let glued = 0;
+  let tailGlued = 0;
   for (const c of tail) {
-    if (c.high === Math.max(c.open, c.close) && c.low === Math.min(c.open, c.close)) glued++;
+    if (c.high === Math.max(c.open, c.close) && c.low === Math.min(c.open, c.close)) tailGlued++;
   }
-  return glued / tail.length > 0.95;
+  if (tailGlued / tail.length > 0.8) return true;
+
+  // 2. Check if ANY substantial run of consecutive glued candles exists anywhere in the series
+  let consecutiveGlued = 0;
+  let maxConsecutiveGlued = 0;
+  let totalGlued = 0;
+
+  for (const c of candles) {
+    if (c.high === Math.max(c.open, c.close) && c.low === Math.min(c.open, c.close)) {
+      consecutiveGlued++;
+      if (consecutiveGlued > maxConsecutiveGlued) {
+        maxConsecutiveGlued = consecutiveGlued;
+      }
+      totalGlued++;
+    } else {
+      consecutiveGlued = 0;
+    }
+  }
+
+  // Any continuous streak of 5+ wickless candles means a closes-only block was stitched in
+  if (maxConsecutiveGlued >= 5) return true;
+
+  // If more than 15% of the total history is completely wickless, flag it
+  if (candles.length >= 50 && totalGlued / candles.length > 0.15) return true;
+
+  return false;
 }
 
 /**

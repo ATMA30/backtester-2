@@ -114,3 +114,20 @@ html, body {
   font-size: 11px;
   opacity: 0.8;
 }
+
+.status-reload-action {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: 6px;
+  padding: 0 2px;
+  font-size: 11px;
+  font-weight: 500;
+  text-decoration: underline;
+  font-family: inherit;
+}
+
+.status-reload-action:hover {
+  filter: brightness(1.2);
+}

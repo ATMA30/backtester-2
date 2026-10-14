@@ -13,7 +13,7 @@ import { useReplayStore } from './store/useReplayStore';
 import { useTradeStore } from './store/useTradeStore';
 import { useUIStore, ToastType } from './store/useUIStore';
 import { fetchHistoricalSeries, PROVENANCE_LABELS } from './services/historicalApi';
-import { getDataset, pruneOrphanCaptures } from './services/db';
+import { getDataset, deleteDataset, getAllDatasets, pruneOrphanCaptures } from './services/db';
 import { isClosesOnlySeries } from './domain/candles';
 import { prepareConversionFor } from './services/fxRates';
 import { sound } from './services/audio';
@@ -123,6 +123,7 @@ export const App: React.FC = () => {
       // A provider cache holding closes only (the old ECB-first daily forex)
       // must not come back: reload that instrument with real wicks instead.
       if (dataset.source !== 'import' && isClosesOnlySeries(dataset.data)) {
+        await deleteDataset(saved.currentSymbol);
         const loaded = await loadDefaultDataset(saved.currentSymbol);
         if (loaded) {
           useMarketStore.getState().setChartType(saved.chartType);
@@ -187,8 +188,14 @@ export const App: React.FC = () => {
     // A single catch around both paths: the previous version awaited an unguarded
     // promise, so a malformed localStorage payload threw before the fallback
     // loader ran and left the app permanently empty.
-    // Before anything can close a trade: only saved sessions still hold trades.
     void pruneOrphanCaptures();
+    void getAllDatasets().then((datasets) => {
+      for (const d of datasets) {
+        if (d.source !== 'import' && d.data && isClosesOnlySeries(d.data)) {
+          void deleteDataset(d.symbol);
+        }
+      }
+    });
 
     void (async () => {
       // Le `finally` enveloppe les *deux* chemins. Attaché au seul second bloc,

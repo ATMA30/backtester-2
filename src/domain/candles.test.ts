@@ -211,6 +211,14 @@ describe('isClosesOnlySeries', () => {
     const series = Array.from({ length: 50 }, (_, i) => candle(i, i % 10 !== 0));
     expect(isClosesOnlySeries(series)).toBe(false);
   });
+
+  it('flags a hybrid series whose past history contains a closes-only block', () => {
+    const hybrid = [
+      ...Array.from({ length: 50 }, (_, i) => candle(i, false)), // old ECB block
+      ...Array.from({ length: 500 }, (_, i) => candle(i + 50, true)), // modern Yahoo wicks
+    ];
+    expect(isClosesOnlySeries(hybrid)).toBe(true);
+  });
 });
 
 describe('mergeWeekendDailyCandles', () => {
